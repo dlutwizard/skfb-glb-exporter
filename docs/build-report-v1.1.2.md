@@ -1,20 +1,20 @@
 # 构建报告 · v1.1.2
 
-> 由 `build/build.py` 自动生成，请勿手改。构建日期：2026-11-01
+> 由 `build/build.py` 自动生成，请勿手改。构建日期：2026-11-03
 
 ## 1. 结论
 
 | 项 | 值 | 门禁 | 结果 |
 |---|---|---|---|
-| onedir 体积 | 150.1 MiB（157385096 B） | ≤ 160 MiB（M1） | PASS |
-| zip 体积 | 70.1 MB（73554809 B） | ≤ 72 MB（M2） | PASS |
-| 启动耗时（--selftest 中位） | 0.83 s | ≤ 1.7 s（M3） | PASS |
+| onedir 体积 | 132.2 MiB（138622207 B） | ≤ 160 MiB（M1） | PASS |
+| zip 体积 | 52.9 MB（55430811 B） | ≤ 72 MB（M2） | PASS |
+| 启动耗时（--selftest 中位） | 0.61 s | ≤ 1.7 s（M3） | PASS |
 | 版本一致性（exe 属性/--version/version.py） | 1.1.2 | 一致（M5） | PASS |
 | exe 自检 | SELFTEST_OK ×3 | 必须（R4） | PASS |
 | 实际解密后端 | wasm | 必须可观测 | PASS |
 | 包内禁止物（config.json / psutil / 旧使用说明） | 无 | 必须（R7） | PASS |
 | zip 内文件数 | 1152 | 连续两次一致 | 记录 |
-| 构建总耗时 | 101.7 s | — | — |
+| 构建总耗时 | 58.7 s | — | — |
 
 ## 2. 体积分项与增量
 
@@ -22,15 +22,15 @@
 |---|---|---|---|---|
 | node_exe | 83.0 MiB | 83.0 MiB | +0.0 MiB |  |
 | libvips_dup | 0.0 MiB | - | +0.0 MiB |  |
-| binzDecrypt_exe | 17.9 MiB | 17.9 MiB | +0.0 MiB |  |
+| binzDecrypt_exe | 0.0 MiB | 17.9 MiB | -17.9 MiB |  |
 | sharp_wasm32 | 0.0 MiB | - | +0.0 MiB |  |
 | emnapi | 0.0 MiB | - | +0.0 MiB |  |
 | tslib | 0.0 MiB | - | +0.0 MiB |  |
 | sharp_win32_x64 | 18.9 MiB | 18.9 MiB | +0.0 MiB |  |
-| engine | 18.2 MiB | 18.2 MiB | +0.0 MiB |  |
+| engine | 0.3 MiB | 18.2 MiB | -17.9 MiB |  |
 | node_modules | 20.0 MiB | 20.0 MiB | +0.0 MiB |  |
-| **onedir 合计** | **150.1 MiB** | **150.1 MiB** | **-0.0 MiB** | |
-| **zip** | **70.1 MB** | **70.2 MB** | **-0.0 MB** | |
+| **onedir 合计** | **132.2 MiB** | **150.1 MiB** | **-17.9 MiB** | |
+| **zip** | **52.9 MB** | **70.2 MB** | **-17.3 MB** | |
 
 ## 3. 瘦身明细（build/slim.py，每条都过守卫）
 
@@ -49,23 +49,23 @@
 
 ```
 $ Sketchfab下载器.exe --version
-Sketchfab下载器 v1.1.2 (build 2026-11-01)
+Sketchfab下载器 v1.1.2 (build 2026-11-03)
 
 $ Sketchfab下载器.exe --env
-RES = C:\Users\user\Sketchfab下载\build\dist_dir\Sketchfab下载器\_internal [OK]
-BASE = C:\Users\user\Sketchfab下载\build\dist_dir\Sketchfab下载器 [OK]
-ENGINE = C:\Users\user\Sketchfab下载\build\dist_dir\Sketchfab下载器\_internal\engine [OK]
-NODE = C:\Users\user\Sketchfab下载\build\dist_dir\Sketchfab下载器\_internal\node.exe [OK]
-CONVERT = C:\Users\user\Sketchfab下载\build\dist_dir\Sketchfab下载器\_internal\convert.mjs [OK]
+RES = C:\Users\Lenovo\Sketchfab下载\build\dist_dir\Sketchfab下载器\_internal [OK]
+BASE = C:\Users\Lenovo\Sketchfab下载\build\dist_dir\Sketchfab下载器 [OK]
+ENGINE = C:\Users\Lenovo\Sketchfab下载\build\dist_dir\Sketchfab下载器\_internal\engine [OK]
+NODE = C:\Users\Lenovo\Sketchfab下载\build\dist_dir\Sketchfab下载器\_internal\node.exe [OK]
+CONVERT = C:\Users\Lenovo\Sketchfab下载\build\dist_dir\Sketchfab下载器\_internal\convert.mjs [OK]
 SHARP = [OK]
 WASM = [OK]
 EXTLIB = [OK]
-NODE_LOOKUP=C:\Users\user\Sketchfab下载\build\dist_dir\Sketchfab下载器\_internal\node.exe
+NODE_LOOKUP=C:\Users\Lenovo\Sketchfab下载\build\dist_dir\Sketchfab下载器\_internal\node.EXE
 DECRYPT_BACKEND=wasm
-BUILD=1.1.2 (2026-11-01), py3.11.5, pyinstaller 6.10.0
+BUILD=1.1.2 (2026-11-03), py3.11.5, pyinstaller 6.10.0
 
 $ Sketchfab下载器.exe --selftest  (×3)
-SELFTEST_OK  0.83s  0.84s  0.81s
+SELFTEST_OK  0.61s  0.60s  0.61s
 ```
 
 ## 5. 未纳入本报告的门禁

@@ -27,6 +27,7 @@ a = Analysis(
         (os.path.join(APP, "extlib"), "extlib"),
         (os.path.join(APP, "node_modules"), "node_modules"),
         (os.path.join(APP, "icon.ico"), "."),
+        (os.path.join(APP, "assets"), "assets"),
         (os.path.join(ROOT, "dist_engine"), "engine"),
         (os.path.join(ROOT, "CHANGELOG.md"), "."),
         (BUILD_INFO, "."),

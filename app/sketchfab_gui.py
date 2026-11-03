@@ -57,6 +57,10 @@ from version import (APP_ID, APP_NAME, CHANGELOG_HEAD, SINGLE_FILE_EXPERIMENTAL,
 CONVERT = RES / "convert.mjs"
 EXTLIB = RES / "extlib"
 ICON = RES / "icon.ico"
+# 打赏收款码目录：打包后随包在 RES/assets/donate，源码运行时退回 app/assets/donate
+DONATE_DIR = RES / "assets" / "donate"
+if not DONATE_DIR.is_dir():
+    DONATE_DIR = _APP_DIR / "assets" / "donate"
 
 
 def _first_existing(paths, want_dir=False):
@@ -304,6 +308,8 @@ class App:
         self.cfg_path = CFG_WRITE
         self.diag_items = []
         self.about = None                 # 关于/诊断 窗口（Toplevel）
+        self.donate = None                # 打赏窗口（Toplevel）
+        self._donate_imgs = []            # 图片引用，防止被 GC 回收
         self.about_state = {}             # 面板内的 Tk 变量与控件引用
         self.update_result = None
 
@@ -406,6 +412,7 @@ class App:
         ttk.Button(bar, text="清空链接", command=self.clear_urls).pack(side="right", padx=8)
         self.about_btn = ttk.Button(bar, text="关于 / 诊断", command=self.show_about)
         self.about_btn.pack(side="right", padx=8)
+        ttk.Button(bar, text="♡ 打赏", command=self.show_donate).pack(side="right")
 
         self.pbar = ttk.Progressbar(root, mode="determinate", maximum=100)
         self.pbar.pack(fill="x", padx=20, pady=(0, 6))
@@ -505,6 +512,78 @@ class App:
             self.status.configure(text="就绪 · v%s · 解密后端 %s" % (__version__, backend))
 
     # ---------------- 关于 / 诊断（R2/R3/R11，T03 接口） ----------------
+    # ---------------- 打赏 ----------------
+    def show_donate(self):
+        """打开打赏窗口：并排显示微信 / 支付宝收款码。"""
+        if self.donate is not None:
+            try:
+                if self.donate.winfo_exists():
+                    self.donate.deiconify()
+                    self.donate.lift()
+                    self.donate.focus_force()
+                    return
+            except Exception:
+                pass
+
+        win = tk.Toplevel(self.root)
+        self.donate = win
+        win.title("打赏 · %s" % APP_NAME)
+        win.configure(background=BG)
+        win.resizable(False, False)
+        win.transient(self.root)
+
+        head = ttk.Frame(win, style="TFrame")
+        head.pack(fill="x", padx=24, pady=(18, 4))
+        ttk.Label(head, text="请作者喝杯咖啡 ☕", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(head, text="这个工具完全免费。如果它帮你省了时间，欢迎打赏支持，金额随意。",
+                  style="Sub.TLabel").pack(anchor="w", pady=(4, 0))
+
+        row = ttk.Frame(win, style="TFrame")
+        row.pack(fill="x", padx=24, pady=(10, 4))
+
+        self._donate_imgs = []
+        for title, fname, color in (("微信打赏", "wechat.png", "#07c160"),
+                                    ("支付宝", "alipay.png", "#1677ff")):
+            card = ttk.Frame(row, style="Card.TFrame", padding=12)
+            card.pack(side="left", padx=(0, 14), fill="both", expand=True)
+            ttk.Label(card, text=title, style="Card.TLabel",
+                      font=("Microsoft YaHei UI", 11, "bold"),
+                      foreground=color).pack()
+            img_path = DONATE_DIR / fname
+            shown = False
+            if img_path.is_file():
+                try:
+                    photo = tk.PhotoImage(file=str(img_path))
+                    # 收款码是正方形，统一缩到 240px 宽展示
+                    if photo.width() > 240:
+                        factor = max(1, photo.width() // 240)
+                        photo = photo.subsample(factor, factor)
+                    self._donate_imgs.append(photo)
+                    tk.Label(card, image=photo, background=CARD).pack(pady=(8, 4))
+                    shown = True
+                except Exception:
+                    pass
+            if not shown:
+                ttk.Label(card, text="收款码图片缺失", style="Card.TLabel",
+                          foreground=MUTED).pack(pady=(20, 20))
+            ttk.Label(card, text="扫码即可，感谢支持 ♥", style="Card.TLabel",
+                      foreground=MUTED).pack(pady=(2, 4))
+
+        foot = ttk.Frame(win, style="TFrame")
+        foot.pack(fill="x", padx=24, pady=(2, 14))
+        ttk.Label(foot, text="打赏完全自愿，不影响任何功能。", style="Sub.TLabel").pack(side="left")
+        ttk.Button(foot, text="关闭", command=win.destroy).pack(side="right")
+
+        # 居中于主窗口
+        win.update_idletasks()
+        try:
+            rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
+            rw, rh = self.root.winfo_width(), self.root.winfo_height()
+            w, h = win.winfo_width(), win.winfo_height()
+            win.geometry("+%d+%d" % (rx + (rw - w) // 2, ry + max(20, (rh - h) // 3)))
+        except Exception:
+            pass
+
     def show_about(self):
         """打开关于/诊断面板（已打开则提到最前）。"""
         if self.about is not None:
