@@ -1,0 +1,139 @@
+%% Sketchfab 模型下载器 v1.1 · 时序图（4 条关键流程）
+%% 对应 docs/架构设计-v1.1.md 第 4 节
+
+%% ---------- 1. 启动 → 版本可见 → 自检 ----------
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant EXE as Sketchfab下载器.exe
+    participant G as App(sketchfab_gui)
+    participant V as version.py
+    participant D as diagnostics.py
+    participant T as Tk root
+
+    U->>EXE: 双击
+    EXE->>G: main()
+    Note over G: RES/BASE 计算完成后立即<br/>os.environ["PATH"] = RES + os.pathsep + PATH
+    G->>V: __version__ / APP_NAME
+    G->>T: root.title(f"{APP_NAME} v{V}")
+    G->>T: 副标题行右侧 "v1.1.0"
+    G->>D: load_build_info(RES)
+    D-->>G: {version, build_date} 或降级"开发版"
+    G->>D: resolve_cfg_paths(BASE, APPDATA)
+    D-->>G: (写目标, 兜底)
+    G->>G: load_cfg() → 目录/并发/更新源
+    G->>D: collect(RES, BASE, CLI_DIR, NODE_EXE)
+    D->>D: node_lookup / decrypt_backend
+    D-->>G: [CheckItem...]
+    alt 有 ok=False
+        G->>T: 日志「⚠ 启动自检发现问题」+ 状态栏「查看诊断」
+        G->>T: 点开 show_about() 面板（人话指引）
+    else 全部 ok
+        G->>T: 日志「✓ 环境自检通过」
+    end
+    G->>T: root.after(120, drain) / mainloop()
+
+%% ---------- 2. 关于面板 + 手动检查更新 ----------
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant A as App
+    participant D as diagnostics
+    participant Q as update_checker
+    participant GH as api.github.com
+    participant W as AboutWindow(Toplevel)
+
+    U->>A: 点「关于」
+    A->>W: 打开面板
+    A->>D: load_build_info / read_changelog_head(RES/CHANGELOG.md, 5)
+    D-->>A: 版本 / 构建日期 / CHANGELOG 前 5 条
+    A->>D: collect(...) → 依赖自检表
+    A->>W: 渲染：版本｜构建日期｜更新日志｜依赖自检｜数据目录｜检查更新
+    U->>W: 点「检查更新」
+    alt 未配置 update_repo 与 update_json_url
+        W->>U: 「未配置更新源（不影响使用）」，零网络请求
+    else 已配置
+        A->>Q: check_async(cfg)
+        Q->>GH: GET /repos/{repo}/releases/latest (timeout=5s)
+        alt 成功
+            GH-->>Q: {tag_name, body, html_url, published_at}
+            Q->>Q: is_newer(current, tag_name)
+            Q-->>A: UpdateResult(is_newer=?)
+            A->>W: 「已是最新 v1.1.0」/「发现 v1.2.0」+ 链接按钮
+        else 超时/404/限流/断网
+            Q-->>A: UpdateResult(error="…") 不弹窗、不阻塞
+            A->>W: 「暂无法检查（离线可忽略）」
+        end
+    end
+
+%% ---------- 3. 一键构建 ----------
+sequenceDiagram
+    autonumber
+    participant Dev as 所有者
+    participant B as build/build.py
+    participant V as app/version.py
+    participant PI as PyInstaller(build/venv)
+    participant S as build/slim.py
+    participant PE as pefile
+    participant Z as zipfile
+    participant O as 发布/
+
+    Dev->>B: python build/build.py [--version 1.1.0]
+    B->>V: __version__ / VERSION_TUPLE
+    B->>B: 校验 semver + 单调性（vs build/sizes.json 末条 + CHANGELOG 首条）
+    alt 版本非法/回退
+        B-->>Dev: exit 2
+    end
+    B->>B: 生成 build/version_info.txt
+    B->>B: 渲染 使用说明.template.txt → 使用说明.txt
+    B->>PI: pyinstaller build/Sketchfab下载器.spec
+    PI-->>B: build/dist_dir/Sketchfab下载器/{exe,_internal}
+    B->>PE: 读 exe FileVersion
+    PE-->>B: (1,1,0,0) 不一致 → exit 5
+    B->>S: apply(onedir, with_legacy=True, dry_run=False)
+    S->>S: assert_guards()（MD5 必须与 nested 副本相等才允许删）
+    S-->>B: [Removed(rel, bytes)...]
+    B->>Z: 写 _internal/CHANGELOG.md、_internal/build_info.json、version.json
+    B->>B: exe --selftest ×3（SELFTEST_OK + 启动耗时）
+    B->>B: exe --version（必须 1.1.0）+ exe --env（全 OK）
+    B->>B: check_sizes(onedir ≤160 MiB, 单组件增量 ≤2 MiB)
+    alt 超预算
+        B-->>Dev: exit 4 + 分项表
+    end
+    B->>B: 回填 使用说明.txt 的 onedir 体积与启动耗时
+    B->>Z: 打包 → 发布/Sketchfab下载器_v1.1.0.zip（顶层目录 Sketchfab下载器/）
+    Z-->>O: zip
+    B->>B: append build/sizes.json；写 docs/build-report-v1.1.0.md
+    B-->>Dev: exit 0 + 体积分项表 + 体积对比表
+
+%% ---------- 4. 下载 + 转换（现有主链路，标注改动点） ----------
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant A as App
+    participant TH as 工作线程
+    participant E as engine main.py
+    participant N as node.exe (RES)
+    participant S as sharp
+
+    U->>A: 粘贴链接 → 开始下载
+    A->>A: save_cfg(patch) 合并语义
+    A->>A: apply_node_visibility(cfg.decrypt_backend)
+    Note over A: auto/wasm → PATH 含 RES；<br/>legacy → 临时剔除 RES（不改引擎）
+    A->>TH: ThreadPoolExecutor(conc)
+    TH->>E: download_one(url)
+    E->>E: is_new_binz_format?
+    alt 新格式 .binz
+        E->>E: node_lookup = shutil.which("node")
+        alt 找到 node 且 tools/wasm 齐全
+            E->>N: decrypt_worker.mjs（WASM 解密）
+        else 否则
+            E->>E: tools/binz/binzDecrypt.exe（legacy 兜底）
+        end
+    else 旧格式
+        E->>E: prepare_legacy_gz（纯 Python）
+    end
+    TH->>N: node convert.mjs uid dir out.glb extlib（显式路径）
+    N->>S: createImageBitmap 垫片 → JPEG 解码 → RGBA
+    N-->>TH: DONE xxMB meshes=n images=n
+    TH-->>A: 队列回调 → 进度/日志

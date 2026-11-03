@@ -1,0 +1,36 @@
+{
+  "node_hidden": true,
+  "env_backend": "wasm",
+  "download_ok": false,
+  "backend_in_log": "wasm",
+  "glb": {
+    "path": "F:\\迅雷下载\\_qa_v11\\out_legacy\\The_Noble_Craftsman-0e8ff87f\\The_Noble_Craftsman_full.glb",
+    "size_mb": 0.45
+  },
+  "restored": true,
+  "env_node_lookup": "C:\\Users\\user\\.workbuddy\\binaries\\node\\versions\\22.22.2-6\\node.exe",
+  "seconds": 112.0,
+  "returncode": 0,
+  "log_tail": [
+    "[1]       Texture 6/9: BLACKSMITH_TEX_OP.jpg (4096x4096, pk=175684)",
+    "[1]         descramble start pk=8104 11088 B",
+    "[1]         descramble 128x128 pk=8104",
+    "[1]         descramble ok 20931 B",
+    "[1]       Texture 7/9: Spark_Diff.jpg (128x128, pk=8104)",
+    "[1]         descramble start pk=105696 6306 B",
+    "[1]         descramble 128x128 pk=105696",
+    "[1]         descramble ok 13496 B",
+    "[1]       Texture 8/9: Spark_Op.jpg (128x128, pk=105696)",
+    "[1]         descramble start pk=23723 11453556 B",
+    "[1]         descramble 4096x4096 pk=23723",
+    "[1]         descramble ok 25590024 B",
+    "[1]       Texture 9/9: BLACKSMITH_TEX.jpg (4096x4096, pk=23723)",
+    "[1]       ��ͼ 9 ��",
+    "[1] [3/4] ��ȡ�����������ݡ�",
+    "[1] [4/4] ת�� osgjs �� GLB��",
+    "[1] DONE 0.5MB meshes=27 images=1",
+    "[1] ? The Noble Craftsman �� The_Noble_Craftsman_full.glb��0.5 MB��",
+    "[1]    Ŀ¼: F:\\Ѹ������\\_qa_v11\\out_legacy\\The_Noble_Craftsman-0e8ff87f",
+    "ȫ���������ɹ� 1��ʧ�� 0"
+  ]
+}

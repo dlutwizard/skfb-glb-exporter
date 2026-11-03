@@ -1,0 +1,136 @@
+%% Sketchfab 模型下载器 v1.1 · 类图（模块级）
+%% 对应 docs/架构设计-v1.1.md 第 3 节
+classDiagram
+    direction LR
+
+    class Version {
+        <<module app/version.py>>
+        +str APP_NAME = "Sketchfab下载器"
+        +str APP_ID = "SketchfabDownloader"
+        +str __version__ = "1.1.0"
+        +tuple VERSION_TUPLE = (1,1,0)
+        +str GITHUB_REPO = ""
+        +bool UPDATE_CHECK_DEFAULT = False
+        +int CHANGELOG_HEAD = 5
+        +version_string()$ str
+        +parse_version(s)$ tuple
+        +dotted(t)$ str
+        +is_newer(cur, latest)$ bool
+    }
+
+    class CheckItem {
+        <<dataclass app/diagnostics.py>>
+        +str key
+        +str label
+        +str path
+        +bool ok
+        +str hint
+    }
+
+    class Diagnostics {
+        <<module app/diagnostics.py>>
+        +collect(res, base, cli_dir, node_exe)$ list~CheckItem~
+        +format_ascii(items)$ str
+        +node_lookup(res)$ str
+        +decrypt_backend(res)$ str
+        +read_changelog_head(path, n)$ list~str~
+        +load_build_info(res)$ dict
+        +resolve_cfg_paths(base, appdata, portable)$ tuple
+    }
+
+    class UpdateResult {
+        <<dataclass app/update_checker.py>>
+        +str current
+        +str latest
+        +bool is_newer
+        +str url
+        +str notes
+        +str published_at
+        +str source
+        +str error
+        +ok() bool
+    }
+
+    class UpdateChecker {
+        <<module app/update_checker.py>>
+        +check(cfg, timeout)$ UpdateResult
+        +check_async(cfg, on_done)$ Thread
+        -_github_latest(repo, token, timeout)$ dict
+        -_json_latest(url, timeout)$ dict
+    }
+
+    class App {
+        <<app/sketchfab_gui.py>>
+        +str cfg
+        +str cfg_path
+        +init_ui()
+        +show_about()
+        +check_update_clicked()
+        +precheck()
+        +save_cfg(patch)
+        +apply_node_visibility(mode)
+    }
+
+    class BuildPipeline {
+        <<build/build.py>>
+        +str version
+        +Path onedir
+        +Path zip_path
+        +run()
+        +check_version_monotonic()
+        +gen_version_info()
+        +gen_readme()
+        +run_pyinstaller()
+        +run_slim()
+        +check_sizes()
+        +make_zip()
+        +verify_version_consistency()
+        +write_report()
+    }
+
+    class SlimRule {
+        <<dataclass build/slim.py>>
+        +str rel_path
+        +str kind
+        +str guard_md5_of
+        +int expect_bytes
+        +bool default_on
+        +applies(onedir)$ bool
+    }
+
+    class Slimmer {
+        <<build/slim.py>>
+        +apply(onedir, with_legacy, dry_run)$ list~Removed~
+        +assert_guards()
+    }
+
+    class SizeRecord {
+        <<dict build/sizes.json>>
+        +str version
+        +str build_date
+        +int onedir_bytes
+        +int zip_bytes
+        +map components
+    }
+
+    class BenchRunner {
+        <<tools/bench.py>>
+        +Path exe
+        +run_startup(times)$ list~float~
+        +run_model(uid, out)$ Sample
+        +sample_tree(pid)$ int
+        +write_markdown(path)
+    }
+
+    App ..> Version : 读版本
+    App ..> Diagnostics : 自检 / CHANGELOG / build_info
+    App ..> UpdateChecker : 手动检查
+    UpdateChecker ..> Version : parse_version / is_newer
+    UpdateChecker ..> UpdateResult : 返回
+    Diagnostics ..> CheckItem : 产出
+    Diagnostics ..> Version : build_info 校验
+    BuildPipeline ..> Version : 读版本
+    BuildPipeline ..> Slimmer : 调瘦身
+    BuildPipeline ..> SizeRecord : 追加账本
+    Slimmer ..> SlimRule : 遍历规则
+    BuildPipeline ..> BenchRunner : selftest 计时

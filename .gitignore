@@ -1,0 +1,50 @@
+# 发布产物与构建中间物（体积大、可再生）
+发布/
+build/dist/
+build/dist_dir/
+build/work/
+build/work_dir/
+build/venv/
+build/gen/
+build/__pycache__/
+*.zip
+*.exe
+*.7z
+*.msi
+
+# 不可再分发的私有资源（见 THIRD-PARTY-NOTICES.md）
+_private/
+
+# 本机实验与历史快照
+_scratch/
+_final/
+_v111/
+
+# 上游参考副本（引擎已固化在 dist_engine/，原始仓库不入库）
+sketchfab-cli-main/
+
+# 依赖目录
+node_modules/
+app/node_modules/
+nodework/node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Node
+npm-debug.log*
+
+# 运行时数据（配置、日志、下载结果）
+config.json
+app/config.json
+app/error.log
+*.log
+output/
+models/
+
+# 开发临时区（个人笔记与试验代码）
+nodework/
+当前状态.md

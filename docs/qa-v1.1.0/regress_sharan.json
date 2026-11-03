@@ -1,0 +1,56 @@
+[
+  {
+    "target": "sketchfab.com/s/p9HSv",
+    "returncode": 0,
+    "seconds": 171.1,
+    "peak_rss_mb": 364,
+    "peak_node_mb": 276,
+    "backend": "wasm",
+    "glb_files": [
+      "F:\\迅雷下载\\_qa_v11\\out\\sketchfab.com\\s\\p9HSv\\Volkswagen_Sharan-b969f5fd\\Volkswagen_Sharan_full.glb"
+    ],
+    "glb": {
+      "valid": true,
+      "version": 2,
+      "meshes": 74,
+      "images": 9,
+      "materials": 9,
+      "skins": 58,
+      "animations": 0,
+      "error": "",
+      "path": "F:\\迅雷下载\\_qa_v11\\out\\sketchfab.com\\s\\p9HSv\\Volkswagen_Sharan-b969f5fd\\Volkswagen_Sharan_full.glb",
+      "size_mb": 37.89
+    },
+    "log_meshes": 74,
+    "log_images": 9,
+    "log_tail": [
+      "[1]         descramble ok 2160 B",
+      "[1]       Texture 2/7: r_glass.png (256x256, pk=247293)",
+      "[1]         no pk �� leaving CDN bytes",
+      "[1]       Texture 3/7: rouge_pompier.png (4x4)",
+      "[1]         descramble start pk=225088 327 B",
+      "[1]         descramble 128x128 pk=225088",
+      "[1]         descramble ok 296 B",
+      "[1]       Texture 4/7: vitres_exterieur.png (128x128, pk=225088)",
+      "[1]         no pk �� leaving CDN bytes",
+      "[1]       Texture 5/7: blanc.png (4x4)",
+      "[1]         descramble start pk=236808 2469 B",
+      "[1]         descramble 256x256 pk=236808",
+      "[1]         descramble ok 2430 B",
+      "[1]       Texture 6/7: chrome.png (256x256, pk=236808)",
+      "[1]         descramble start pk=115604 2121 B",
+      "[1]         descramble 256x256 pk=115604",
+      "[1]         descramble ok 1857 B",
+      "[1]       Texture 7/7: acier.png (256x256, pk=115604)",
+      "[1]       ��ͼ 7 ��",
+      "[1] [3/4] ��ȡ�����������ݡ�",
+      "[1] [4/4] ת�� osgjs �� GLB��",
+      "[1] DONE 37.9MB meshes=74 images=9",
+      "[1] ? Volkswagen Sharan �� Volkswagen_Sharan_full.glb��37.9 MB��",
+      "[1]    Ŀ¼: F:\\Ѹ������\\_qa_v11\\out\\sketchfab.com\\s\\p9HSv\\Volkswagen_Sharan-b969f5fd",
+      "ȫ���������ɹ� 1��ʧ�� 0"
+    ],
+    "glb_ok": true,
+    "images_match_log": true
+  }
+]

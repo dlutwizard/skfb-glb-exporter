@@ -1,0 +1,102 @@
+[
+  {
+    "version": "1.0.0",
+    "build_date": "2025-10-31",
+    "onedir_bytes": 186589513,
+    "zip_bytes": 85437687,
+    "startup_sec": 1.7,
+    "note": "v1.0.0 基线（手工打包产物实测）。onedir 含顶层重复 libvips 副本与 @img/sharp-wasm32",
+    "components": {
+      "node_exe": 87074816,
+      "libvips_dup": 19351552,
+      "binzDecrypt_exe": 18766080,
+      "sharp_wasm32": 9325870,
+      "emnapi": 436901,
+      "tslib": 92088,
+      "sharp_win32_x64": 19812379,
+      "engine": 19118508,
+      "node_modules": 30836561
+    }
+  },
+  {
+    "version": "1.1.0",
+    "build_date": "2026-11-01",
+    "onedir_bytes": 157422547,
+    "zip_bytes": 73570615,
+    "startup_sec": 1.0,
+    "zip_files": 1152,
+    "slim_rules": [
+      "S1",
+      "S2",
+      "S3",
+      "S4",
+      "S5"
+    ],
+    "decrypt_backend": "wasm",
+    "components": {
+      "node_exe": 87074816,
+      "libvips_dup": 0,
+      "binzDecrypt_exe": 18766080,
+      "sharp_wasm32": 0,
+      "emnapi": 0,
+      "tslib": 0,
+      "sharp_win32_x64": 19812379,
+      "engine": 19118508,
+      "node_modules": 20981702
+    }
+  },
+  {
+    "version": "1.1.1",
+    "build_date": "2026-11-01",
+    "onedir_bytes": 157427351,
+    "zip_bytes": 73574616,
+    "startup_sec": 1.11,
+    "zip_files": 1152,
+    "slim_rules": [
+      "S1",
+      "S2",
+      "S3",
+      "S4",
+      "S5"
+    ],
+    "decrypt_backend": "wasm",
+    "components": {
+      "node_exe": 87074816,
+      "libvips_dup": 0,
+      "binzDecrypt_exe": 18766080,
+      "sharp_wasm32": 0,
+      "emnapi": 0,
+      "tslib": 0,
+      "sharp_win32_x64": 19812379,
+      "engine": 19118508,
+      "node_modules": 20981702
+    }
+  },
+  {
+    "version": "1.1.2",
+    "build_date": "2026-11-01",
+    "onedir_bytes": 157385096,
+    "zip_bytes": 73554809,
+    "startup_sec": 0.83,
+    "zip_files": 1152,
+    "slim_rules": [
+      "S1",
+      "S2",
+      "S3",
+      "S4",
+      "S5"
+    ],
+    "decrypt_backend": "wasm",
+    "components": {
+      "node_exe": 87074816,
+      "libvips_dup": 0,
+      "binzDecrypt_exe": 18766080,
+      "sharp_wasm32": 0,
+      "emnapi": 0,
+      "tslib": 0,
+      "sharp_win32_x64": 19812379,
+      "engine": 19118508,
+      "node_modules": 20981702
+    }
+  }
+]
