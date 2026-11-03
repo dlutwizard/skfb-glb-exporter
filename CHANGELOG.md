@@ -6,6 +6,14 @@
 打包时本文件会被复制到 `_internal/CHANGELOG.md`，「关于」面板离线读取它，
 因此日志正文必须是纯文本 Markdown，不要写图片或外链依赖。
 
+## [1.1.4] - 2026-11-03
+
+### 修复
+- **skfb.ly 短链无法解析**：Sketchfab 于近期对 `skfb.ly` 与 `sketchfab.com/s/` 启用了 AWS WAF
+  JS 挑战（HTTP 202 `x-amzn-waf-action: challenge`），纯 HTTP 客户端无法通过，短链解析全部失败。
+  现在直连两条路径失败后自动改用第三方短链还原服务（unshorten.me）兜底，
+  仍失败时给出明确指引（改粘浏览器地址栏完整链接）。
+
 ## [1.1.3] - 2026-11-03
 
 ### 新增

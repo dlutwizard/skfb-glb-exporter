@@ -1093,6 +1093,30 @@ def _fetch_final_url(url: str):
         return int(getattr(r, "status", 200) or 200), r.geturl()
 
 
+def _unshorten_via_service(short_url: str, log=None):
+    """第三方短链还原（unshorten.me 免费接口）→ 成功返回目标 URL，失败返回 None。
+
+    背景：2026-11 起 Sketchfab 对 skfb.ly 与 sketchfab.com/s/ 全量上了 AWS WAF
+    JS 挑战（HTTP 202 + x-amzn-waf-action: challenge），纯 HTTP 客户端无法通过。
+    第三方还原服务在自己侧用真实浏览器解开跳转，可绕开这一限制。
+    """
+    try:
+        import json as _json
+        req = urllib.request.Request(
+            "https://unshorten.me/json/" + urllib.parse.quote(short_url, safe=""),
+            headers={"User-Agent": UA, "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=RESOLVE_TIMEOUT) as r:
+            data = _json.loads(r.read().decode("utf-8", "replace"))
+        if data.get("success") and data.get("resolved_url"):
+            if log:
+                log("第三方还原成功 → %s" % data["resolved_url"], None)
+            return data["resolved_url"]
+    except Exception as e:
+        if log:
+            log("第三方还原不可用：%s" % e, WARN)
+    return None
+
+
 def resolve_and_uid(url: str, log=None):
     """
     链接 → (32 位 UID, 最终 URL)。
@@ -1145,9 +1169,16 @@ def resolve_and_uid(url: str, log=None):
 
     detail = "；".join(problems[-2:])[:300]
     if is_short:
+        # Sketchfab 已对短链启用全量 WAF 挑战（202），直连两条路都过不去，
+        # 最后试一次第三方还原服务；成功则从目标 URL 里取 UID。
+        resolved = _unshorten_via_service(original, log=log)
+        if resolved:
+            m = re.search(r"([0-9a-f]{32})", resolved)
+            if m:
+                return m.group(1), resolved
         raise RuntimeError(
-            "短链解析失败，请改粘完整链接（sketchfab.com/3d-models/...）。"
-            "已尝试 sketchfab.com/s 与 skfb.ly 两条路径：%s" % detail)
+            "短链解析失败：Sketchfab 的反爬防护（WAF）目前拦截了 skfb.ly 短链的自动解析。"
+            "请改粘浏览器地址栏里的完整链接（sketchfab.com/3d-models/...）。%s" % detail)
     raise RuntimeError("链接里没有找到模型 ID：%s" % detail)
 
 
