@@ -254,7 +254,7 @@ def _http_via_curl(url: str, timeout: int, dest: Optional[Path] = None) -> bytes
         if _CURRENT_PROXY:
             cmd.extend(["-x", _CURRENT_PROXY])
         cmd.append(url)
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True, **_hidden_kwargs())
         if proc.returncode != 0:
             err = (proc.stderr or proc.stdout or "").strip()
             raise RuntimeError(f"curl exit {proc.returncode}: {err[:400]}")
@@ -625,6 +625,25 @@ def _find_wine() -> Optional[str]:
     return None
 
 
+def _hidden_kwargs() -> dict:
+    """
+    Windows 下隐藏子进程的控制台窗口。
+
+    GUI 版是以无控制台方式启动的，但只要 spawn 一个控制台程序（node.exe / curl.exe），
+    Windows 就会为它新建一个黑框一闪而过。CREATE_NO_WINDOW + STARTF_USESHOWWINDOW
+    能彻底避免这个现象；非 Windows 平台返回空字典，行为不变。
+    """
+    if not sys.platform.startswith("win"):
+        return {}
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = subprocess.SW_HIDE
+    return {
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+        "startupinfo": si,
+    }
+
+
 def run_tool(cmd: list[str], cwd: Path) -> None:
     import tempfile
 
@@ -794,6 +813,7 @@ def _decrypt_binz_wasm(work_dir: Path, key1: str, static_key: str) -> None:
         encoding="utf-8",
         errors="replace",
         env={**os.environ, "NODE_NO_WARNINGS": "1"},
+        **_hidden_kwargs(),
     )
     if proc.stderr:
         for line in proc.stderr.strip().splitlines()[-20:]:
