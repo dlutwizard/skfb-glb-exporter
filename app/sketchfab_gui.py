@@ -191,6 +191,45 @@ DECRYPT_MODES = ("auto", "wasm", "legacy")
 
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
+# 引擎进度标记 → (占单个模型的完成比例, 展示文案)。
+# 比例按各步骤实际耗时占比估算：下载网格与解贴图最慢，给最大权重。
+STEP_PROGRESS = {
+    "viewer": (0.04, "获取模型信息"),
+    "model": (0.08, "解析模型"),
+    "format": (0.10, "判断文件格式"),
+    "keys": (0.16, "提取解密密钥"),
+    "keys_partial": (0.18, "密钥部分可用"),
+    "mesh": (0.34, "下载网格数据"),
+    "decrypt": (0.52, "解密模型数据"),
+    "textures": (0.74, "下载并解密贴图"),
+    "textures_warn": (0.88, "贴图已跳过"),
+    "convert": (0.94, "转换 GLB"),
+}
+TEXTURE_BASE = 0.74      # 贴图阶段起点
+TEXTURE_SPAN = 0.14      # 贴图阶段占用区间
+
+
+def step_progress(msg: str):
+    """
+    把引擎的进度标记翻译成 ``(单模型完成比例, 中文说明)``。
+
+    认不出来就返回 ``(None, None)``，调用方忽略即可——宁可少更新，
+    也不要把进度条搞得乱跳。
+    """
+    text = (msg or "").strip()
+    m = re.match(r"step:([a-z_]+)", text)
+    if m:
+        hit = STEP_PROGRESS.get(m.group(1))
+        if hit:
+            return hit[0], hit[1]
+        return None, None
+    m = re.search(r"Texture\s+(\d+)\s*/\s*(\d+)", text)
+    if m:
+        done, total = int(m.group(1)), max(1, int(m.group(2)))
+        return TEXTURE_BASE + TEXTURE_SPAN * (done / total), "下载并解密贴图 %d/%d" % (done, total)
+    return None, None
+
+
 BG = "#f5f6f8"
 CARD = "#ffffff"
 ACCENT = "#2f6fed"
@@ -303,6 +342,7 @@ class App:
         self.total = 0
         self.finished = 0
         self.ok_count = 0
+        self._frac = {}                   # 每个模型当前的单模型完成比例（键为任务序号）
         self.fail_count = 0
         self.cfg = load_cfg()
         self.cfg_path = CFG_WRITE
@@ -350,6 +390,10 @@ class App:
                         font=("Microsoft YaHei UI", 10))
         style.configure("TEntry", padding=6)
         style.configure("Treeview", font=("Consolas", 9), rowheight=22)
+        # 下载进度条：细边框 + 主题色填充，比默认灰色块醒目
+        style.configure("Bar.Horizontal.TProgressbar", troughcolor="#e2e6ee",
+                        background=ACCENT, bordercolor="#e2e6ee", lightcolor=ACCENT,
+                        darkcolor=ACCENT, thickness=12, borderwidth=0)
         style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 9, "bold"))
 
         head = ttk.Frame(root, style="TFrame")
@@ -414,8 +458,19 @@ class App:
         self.about_btn.pack(side="right", padx=8)
         ttk.Button(bar, text="♡ 打赏", command=self.show_donate).pack(side="right")
 
-        self.pbar = ttk.Progressbar(root, mode="determinate", maximum=100)
-        self.pbar.pack(fill="x", padx=20, pady=(0, 6))
+        progwrap = ttk.Frame(root, style="TFrame")
+        progwrap.pack(fill="x", padx=20, pady=(2, 8))
+
+        prow = ttk.Frame(progwrap, style="TFrame")
+        prow.pack(fill="x")
+        self.prog_label = ttk.Label(prow, text="等待开始", style="Sub.TLabel")
+        self.prog_label.pack(side="left")
+        self.prog_pct = ttk.Label(prow, text="0%", style="Ver.TLabel")
+        self.prog_pct.pack(side="right")
+
+        self.pbar = ttk.Progressbar(progwrap, mode="determinate", maximum=100,
+                                    style="Bar.Horizontal.TProgressbar")
+        self.pbar.pack(fill="x", pady=(5, 0))
 
         logwrap = ttk.Frame(root, style="Card.TFrame")
         logwrap.pack(fill="both", expand=True, padx=20, pady=(0, 6))
@@ -918,7 +973,10 @@ class App:
         self.finished = 0
         self.ok_count = 0
         self.fail_count = 0
+        self._frac = {}
         self.pbar.configure(value=0, maximum=100)
+        self.prog_pct.configure(text="0%")
+        self.prog_label.configure(text="准备中…")
         self.btn.configure(state="disabled", text="下载中…")
         self.open_btn.configure(state="disabled")
         self.status.configure(text=f"0 / {self.total} 完成（并发 {conc}）")
@@ -933,14 +991,22 @@ class App:
         # 进度回调是全局的，用线程局部变量区分是哪个任务的输出
         try:
             cli = load_cli()
-            cli.set_progress_callback(
-                lambda m: self.q.put(("log", (f"{getattr(_tls, 'tag', '?')} {m}", None)))
-            )
+
+            def _on_progress(m):
+                tag = getattr(_tls, "tag", "?")
+                self.q.put(("log", (f"{tag} {m}", None)))
+                idx = getattr(_tls, "idx", None)
+                frac, label = step_progress(m)
+                if idx is not None and frac is not None:
+                    self.q.put(("progress", (idx, frac, label)))
+
+            cli.set_progress_callback(_on_progress)
         except Exception as e:
             self.q.put(("log", (f"⚠ 下载引擎加载失败: {e}", ERR)))
 
         def task(idx, url):
             _tls.tag = f"[{idx}]"
+            _tls.idx = idx
 
             def log(text, color=None):
                 self.q.put(("log", (f"{_tls.tag} {text}", color)))
@@ -972,8 +1038,22 @@ class App:
                     if color is None and ("失败" in text or text.strip().startswith("⚠")):
                         color = ERR
                     self.logline(text, color)
+                elif kind == "progress":
+                    idx, frac, label = payload
+                    self._frac[idx] = max(0.0, min(1.0, frac))
+                    total = max(1, self.total)
+                    done = self.finished + sum(self._frac.values())
+                    pct = max(0.0, min(100.0, done / total * 100))
+                    self.pbar.configure(value=pct)
+                    self.prog_pct.configure(text="%d%%" % int(round(pct)))
+                    if self.total > 1:
+                        self.prog_label.configure(
+                            text="%s（%d/%d 已下载）" % (label, self.finished, self.total))
+                    else:
+                        self.prog_label.configure(text=label)
                 elif kind == "task_done":
                     idx, ok, name, detail, folder = payload
+                    self._frac.pop(idx, None)
                     self.finished += 1
                     if ok:
                         self.ok_count += 1
@@ -1000,6 +1080,13 @@ class App:
         self.open_btn.configure(state="normal" if self.ok_count else "disabled")
         self.status.configure(
             text=f"全部完成：成功 {self.ok_count}，失败 {self.fail_count}")
+        self._frac = {}
+        if self.fail_count:
+            self.prog_label.configure(text="已完成，%d 个失败" % self.fail_count)
+        else:
+            self.prog_label.configure(text="全部下载完成")
+            self.pbar.configure(value=100)
+            self.prog_pct.configure(text="100%")
         self.logline("")
         self.logline("─" * 66, "#4b5563")
         self.logline(f"批量结束：成功 {self.ok_count} 个，失败 {self.fail_count} 个", OK if not self.fail_count else WARN)
