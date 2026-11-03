@@ -542,32 +542,35 @@ class App:
         row.pack(fill="x", padx=24, pady=(10, 4))
 
         self._donate_imgs = []
+        rendered = 0
         for title, fname, color in (("微信打赏", "wechat.png", "#07c160"),
                                     ("支付宝", "alipay.png", "#1677ff")):
+            img_path = DONATE_DIR / fname
+            if not img_path.is_file():
+                # 没有配这个渠道的收款码就整栏跳过，不显示占位/缺图提示
+                continue
+            try:
+                photo = tk.PhotoImage(file=str(img_path))
+            except Exception:
+                continue
+            # 收款码统一缩到 240px 宽展示（整数倍缩小，保证不模糊）
+            if photo.width() > 240:
+                factor = max(1, photo.width() // 240)
+                photo = photo.subsample(factor, factor)
+            self._donate_imgs.append(photo)
+
             card = ttk.Frame(row, style="Card.TFrame", padding=12)
             card.pack(side="left", padx=(0, 14), fill="both", expand=True)
             ttk.Label(card, text=title, style="Card.TLabel",
                       font=("Microsoft YaHei UI", 11, "bold"),
                       foreground=color).pack()
-            img_path = DONATE_DIR / fname
-            shown = False
-            if img_path.is_file():
-                try:
-                    photo = tk.PhotoImage(file=str(img_path))
-                    # 收款码是正方形，统一缩到 240px 宽展示
-                    if photo.width() > 240:
-                        factor = max(1, photo.width() // 240)
-                        photo = photo.subsample(factor, factor)
-                    self._donate_imgs.append(photo)
-                    tk.Label(card, image=photo, background=CARD).pack(pady=(8, 4))
-                    shown = True
-                except Exception:
-                    pass
-            if not shown:
-                ttk.Label(card, text="收款码图片缺失", style="Card.TLabel",
-                          foreground=MUTED).pack(pady=(20, 20))
+            tk.Label(card, image=photo, background=CARD).pack(pady=(8, 4))
             ttk.Label(card, text="扫码即可，感谢支持 ♥", style="Card.TLabel",
                       foreground=MUTED).pack(pady=(2, 4))
+            rendered += 1
+
+        if not rendered:
+            ttk.Label(row, text="暂未配置收款码。", style="Sub.TLabel").pack(pady=20)
 
         foot = ttk.Frame(win, style="TFrame")
         foot.pack(fill="x", padx=24, pady=(2, 14))
