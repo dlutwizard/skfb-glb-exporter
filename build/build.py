@@ -932,6 +932,13 @@ def run(args: argparse.Namespace) -> int:
     log("  启动    %.2f s（--selftest 中位）｜解密后端 %s" %
         (probe["startup_median"], probe["backend"]))
     log("-" * 74)
+
+    # 收尾：自动清理构建中间产物与旧版本发布物（tools/cleanup.py，零风险）
+    if not getattr(args, "no_clean", False):
+        step("9/9+ 构建后自动清理")
+        rc = subprocess.call([sys.executable, str(ROOT / "tools" / "cleanup.py")])
+        if rc != 0:
+            warnings.append("构建后清理未完全成功（见 tools/cleanup.py 输出）")
     return 0
 
 
@@ -943,6 +950,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="构建实验性单文件 exe（不写入 发布/）")
     parser.add_argument("--keep-legacy-decrypt", action="store_true",
                         help="保留 binzDecrypt.exe（S6，默认删除：该二进制来源无明确许可）")
+    parser.add_argument("--no-clean", action="store_true",
+                        help="跳过构建后的自动清理（默认构建结束即清理中间产物）")
     args = parser.parse_args(argv)
 
     ensure_build_python(argv)
