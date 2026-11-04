@@ -18,6 +18,21 @@ Windows 桌面应用（tkinter），带批量并行下载、进度条、依赖�
 
 ---
 
+## 隐私与网络行为
+
+- 下载过程只与 `sketchfab.com` / `api.sketchfab.com` / `media.sketchfab.com` 通信，**不上传任何本地文件**，不需要登录。
+- **短链例外**：Sketchfab 已对 `skfb.ly` 短链启用反爬挑战，程序本身无法解开，
+  会自动把该**短链**（仅短链本身，不含其他信息）发给第三方还原服务 `unshorten.me` 换取真实地址。
+  介意的话请直接粘贴浏览器地址栏里的完整链接 `https://sketchfab.com/3d-models/...`，这条路径完全本地解析、不经过任何第三方。
+- **TLS 全局强制校验**：早期版本在证书异常时会静默降级为“不校验”，v1.1.7 起已移除该兜底。
+  如果出现证书报错，说明链路可能被代理/杀软拦截，程序会直接失败而不是偷偷放行。
+
+**发布包校验**：每个 Release 附带 `SHA256SUMS.txt`，下载后可用
+`certutil -hashfile SketchfabDownloader_vX.Y.Z.zip SHA256` 比对。EXE 未做代码签名，
+于是 SmartScreen 首次运行会提示“未知发布者”。
+
+---
+
 ## 直接使用（推荐）
 
 到 [Releases](../../releases) 下载最新的 `Sketchfab下载器_vX.Y.Z.zip`，解压到任意目录，双击

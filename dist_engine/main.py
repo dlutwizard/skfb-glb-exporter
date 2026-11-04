@@ -25,6 +25,8 @@ import shutil
 import ssl
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -41,26 +43,36 @@ BINZ_DECRYPT = ROOT / "tools" / "binz" / "binzDecrypt.exe"
 OSGCONV = ROOT / "tools" / "OsgConv" / "osgconv.exe"
 
 # Runtime options (CLI / library helpers)
-_CURRENT_PROXY: Optional[str] = None
-_PROGRESS_CB: Optional[Callable[[str], None]] = None
+#
+# 用 threading.local 而不是模块级全局：并发下载时每个工作线程有独立的代理与
+# 进度回调，避免 A 任务的进度被 B 任务覆盖（早期版本用全局变量会串台）。
+_LOCAL = threading.local()
+
+
+def _get_proxy() -> Optional[str]:
+    return getattr(_LOCAL, "proxy", None)
+
+
+def _get_cb() -> Optional[Callable[[str], None]]:
+    return getattr(_LOCAL, "cb", None)
 
 
 def set_proxy(proxy: Optional[str]) -> None:
-    """http(s)://user:pass@host:port or socks5://… — None = direct."""
-    global _CURRENT_PROXY
-    _CURRENT_PROXY = (proxy or "").strip() or None
+    """http(s)://user:pass@host:port or socks5://… — None = direct（仅作用于当前线程）。"""
+    _LOCAL.proxy = (proxy or "").strip() or None
 
 
 def set_progress_callback(cb: Optional[Callable[[str], None]]) -> None:
-    global _PROGRESS_CB
-    _PROGRESS_CB = cb
+    """设置当前线程的进度回调（并发任务互不影响）。"""
+    _LOCAL.cb = cb
 
 
 def _progress(msg: str) -> None:
     log(msg)
-    if _PROGRESS_CB:
+    cb = _get_cb()
+    if cb:
         try:
-            _PROGRESS_CB(msg)
+            cb(msg)
         except Exception:
             pass
 
@@ -148,9 +160,10 @@ def _is_retryable(exc: BaseException) -> bool:
 
 
 def _proxy_dict() -> Optional[dict]:
-    if not _CURRENT_PROXY:
+    proxy = _get_proxy()
+    if not proxy:
         return None
-    return {"http": _CURRENT_PROXY, "https": _CURRENT_PROXY}
+    return {"http": proxy, "https": proxy}
 
 
 def _http_via_requests(url: str, timeout: int) -> bytes:
@@ -204,11 +217,11 @@ def _http_via_urllib(url: str, timeout: int, *, insecure: bool = False) -> bytes
     else:
         ctx = _ssl_context()
     handlers: list[Any] = [urllib.request.HTTPSHandler(context=ctx)]
-    if _CURRENT_PROXY:
+    if _get_proxy():
         handlers.insert(
             0,
             urllib.request.ProxyHandler(
-                {"http": _CURRENT_PROXY, "https": _CURRENT_PROXY}
+                _proxy_dict() or {}
             ),
         )
     opener = urllib.request.build_opener(*handlers)
@@ -251,8 +264,8 @@ def _http_via_curl(url: str, timeout: int, dest: Optional[Path] = None) -> bytes
             "-o",
             str(tmp),
         ]
-        if _CURRENT_PROXY:
-            cmd.extend(["-x", _CURRENT_PROXY])
+        if _get_proxy():
+            cmd.extend(["-x", _get_proxy()])
         cmd.append(url)
         proc = subprocess.run(cmd, capture_output=True, text=True, **_hidden_kwargs())
         if proc.returncode != 0:
@@ -273,14 +286,17 @@ def _http_via_curl(url: str, timeout: int, dest: Optional[Path] = None) -> bytes
 def http_get_bytes(url: str, *, timeout: int = 180, label: str = "") -> bytes:
     """
     Download URL with multiple backends and retries.
-    Order: requests → urllib → curl.exe → insecure urllib (last resort).
+    Order: requests → urllib → curl.exe.
+
+    所有后端都**强制校验 TLS 证书**。早期版本还有一个"最后兜底：不校验证书"的分支，
+    在代理/杀软/中间人环境下会静默降级，用户完全无感地接受被篡改的流量，已移除。
+    证书有问题时应该报错让人看见，而不是偷偷关掉校验。
     """
     last_err: Optional[BaseException] = None
     backends = (
         ("requests", lambda: _http_via_requests(url, timeout)),
         ("urllib", lambda: _http_via_urllib(url, timeout, insecure=False)),
         ("curl", lambda: _http_via_curl(url, timeout)),
-        ("urllib-insecure", lambda: _http_via_urllib(url, timeout, insecure=True)),
     )
 
     for attempt in range(1, MAX_RETRIES + 1):
@@ -294,7 +310,7 @@ def http_get_bytes(url: str, *, timeout: int = 180, label: str = "") -> bytes:
                 return data
             except Exception as e:
                 last_err = e
-                if not _is_retryable(e) and name != "urllib-insecure":
+                if not _is_retryable(e):
                     # Non-network HTTP errors (404 etc.) — try next backend only if useful
                     if isinstance(e, urllib.error.HTTPError) and e.code == 404:
                         raise
@@ -704,7 +720,7 @@ def run_tool(cmd: list[str], cwd: Path) -> None:
                         pass
         if proc.returncode != 0:
             msg = (err or out or "").strip()
-            raise RuntimeError(f"Команда код {proc.returncode}:\n{msg[:900]}")
+            raise RuntimeError(f"外部工具执行失败（退出码 {proc.returncode}）：\n{msg[:900]}")
         return
 
     proc = subprocess.run(
@@ -720,7 +736,7 @@ def run_tool(cmd: list[str], cwd: Path) -> None:
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip()
         # 0xC0000005 = 3221225477 = ACCESS_VIOLATION (common osgconv crash)
-        raise RuntimeError(f"Команда код {proc.returncode}:\n{err[:900]}")
+        raise RuntimeError(f"外部工具执行失败（退出码 {proc.returncode}）：\n{err[:900]}")
 
 
 def is_new_binz_format(viewer_info: dict) -> bool:
@@ -737,7 +753,7 @@ def is_new_binz_format(viewer_info: dict) -> bool:
 def download_model_files(viewer_info: dict, work_dir: Path, new_format: bool) -> None:
     files = viewer_info.get("files") or []
     if not files:
-        raise RuntimeError("У модели нет mesh-файлов в viewer_info (приватная/битая?).")
+        raise RuntimeError("这个模型没有可下载的网格文件（可能是私有模型或数据损坏）")
 
     osgjs_url = files[0]["osgjsUrl"]
     if new_format:
@@ -1130,13 +1146,14 @@ def download_one(
     Returns dict:
       path, dir, uid, name, author, description, source_url
     """
-    prev_proxy = _CURRENT_PROXY
-    prev_cb = _PROGRESS_CB
+    prev_proxy = _get_proxy()
+    prev_cb = _get_cb()
     if proxy is not None:
         set_proxy(proxy)
     if progress is not None:
         set_progress_callback(progress)
 
+    tmp_dir: Optional[Path] = None
     try:
         uid = extract_uid(url)
         # Progress tokens are machine-readable for bot i18n: "step:<key>" or "step:<key>|<args>"
@@ -1153,10 +1170,12 @@ def download_one(
 
         root = Path(out_root) if out_root else DOWNLOADS
         root.mkdir(parents=True, exist_ok=True)
-        out_dir = root / f"{model_name}-{uid[:8]}"
-        if out_dir.exists():
-            shutil.rmtree(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
+        final_dir = root / f"{model_name}-{uid[:8]}"
+        # 先下载到同盘的临时目录，**全部成功之后**才替换旧目录。
+        # 早期版本是下载前直接 rmtree(final_dir)：一旦断网/中途退出，
+        # 之前已经下好的模型也被删了，属于数据丢失级缺陷。
+        out_dir = Path(tempfile.mkdtemp(prefix=".sftmp-", dir=str(root)))
+        tmp_dir: Optional[Path] = out_dir
 
         new_format = is_new_binz_format(viewer_info)
         _progress(f"step:format|{'binz' if new_format else 'legacy'}")
@@ -1247,6 +1266,23 @@ def download_one(
             json.dumps(meta, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        # 全部产物就绪 → 原子替换旧目录（旧目录先改名备份，替换失败自动回滚）
+        backup = None
+        if final_dir.exists():
+            backup = final_dir.with_name(final_dir.name + ".old")
+            shutil.rmtree(backup, ignore_errors=True)
+            final_dir.rename(backup)
+        try:
+            out_dir.rename(final_dir)
+        except Exception:
+            if backup is not None and backup.exists() and not final_dir.exists():
+                backup.rename(final_dir)
+            raise
+        if backup is not None:
+            shutil.rmtree(backup, ignore_errors=True)
+        out_dir = final_dir
+        model_path = final_dir / model_path.name
+
         _progress("step:done")
         return {
             "path": model_path,
@@ -1259,6 +1295,12 @@ def download_one(
             "source_url": url.strip(),
         }
     finally:
+        # 失败路径：临时目录还在说明没替换成功，直接清掉，旧目录毫发无伤
+        try:
+            if tmp_dir is not None and tmp_dir.exists():
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
         set_proxy(prev_proxy)
         set_progress_callback(prev_cb)
 
