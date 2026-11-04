@@ -350,6 +350,13 @@ def _print_guard_table(slimmer: Slimmer, onedir: Path, keep_legacy: bool) -> Non
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    # 输出里有中文：被 subprocess 捕获时 Windows 默认按 GBK 编码，
+    # 调用方按 UTF-8 解码就会看到乱码（SFD-006 的根因之一）。统一强制 UTF-8。
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     parser = argparse.ArgumentParser(description="Sketchfab 下载器零风险瘦身")
     parser.add_argument("onedir", help="包根目录（含 Sketchfab下载器.exe 的那个文件夹）")
     parser.add_argument("--dry-run", action="store_true", help="只预演，不真删")

@@ -11,25 +11,24 @@ import time
 
 import pytest
 
-from conftest import QA_EXE
 from version import __version__
 
 
-def _run(*args, timeout=180):
-    return subprocess.run([str(QA_EXE), *args], capture_output=True,
+def _run(exe, *args, timeout=180):
+    return subprocess.run([str(exe), *args], capture_output=True,
                           text=True, encoding="utf-8", errors="replace",
                           timeout=timeout)
 
 
 def test_selftest_ok(qa_exe):
-    proc = _run("--selftest")
+    proc = _run(qa_exe, "--selftest")
     assert proc.returncode == 0
     assert "SELFTEST_OK" in (proc.stdout + proc.stderr)
 
 
 def test_env_has_three_new_lines(qa_exe):
     """--env 必须包含 NODE_LOOKUP / DECRYPT_BACKEND / BUILD 三行（架构 T02 验收）。"""
-    proc = _run("--env")
+    proc = _run(qa_exe, "--env")
     assert proc.returncode == 0
     out = proc.stdout + proc.stderr
     for key in ("RES", "BASE", "ENGINE", "NODE", "CONVERT",
@@ -40,12 +39,14 @@ def test_env_has_three_new_lines(qa_exe):
     m = re.search(r"DECRYPT_BACKEND=(\w+)", out)
     assert m, "缺 DECRYPT_BACKEND 行"
     assert m.group(1) == "wasm", "生产后端应为 wasm，实际 %s" % m.group(1)
-    m = re.search(r"BUILD=1\.1\.0 \(", out)
+    # 版本号从 app/version.py 读，不在测试里写死（SFD-006）
+    m = re.search(r"BUILD=(\S+) \(", out)
     assert m, "BUILD 行缺版本：%r" % out
+    assert m.group(1) == __version__, "BUILD=%s 与 version.py 的 %s 不一致" % (m.group(1), __version__)
 
 
 def test_env_all_ok(qa_exe):
-    proc = _run("--env")
+    proc = _run(qa_exe, "--env")
     out = proc.stdout + proc.stderr
     assert "MISSING" not in out, "发布包自检不应有 MISSING：\n%s" % out
 
@@ -55,7 +56,7 @@ def test_cold_start_median_5(qa_exe):
     samples = []
     for _ in range(5):
         t0 = time.perf_counter()
-        proc = _run("--selftest")
+        proc = _run(qa_exe, "--selftest")
         elapsed = time.perf_counter() - t0
         assert "SELFTEST_OK" in (proc.stdout + proc.stderr)
         samples.append(elapsed)

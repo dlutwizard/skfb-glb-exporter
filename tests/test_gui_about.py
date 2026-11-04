@@ -100,7 +100,7 @@ def test_gui_dual_link_batch_smoke(app, tmp_path):
     inst = app
     calls = {"download": []}
 
-    def fake_download_task(url, out, full=True, log=None):
+    def fake_download_task(url, out, full=True, log=None, progress=None):
         calls["download"].append(url)
         return ("模型A", "fake.glb（1.0 MB）", tmp_path)
 

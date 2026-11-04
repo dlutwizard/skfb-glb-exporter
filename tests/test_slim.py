@@ -8,6 +8,7 @@ R6 / slim.py 守卫规则引擎测试。
   * MD5 不匹配 → exit 1 且一个文件都不删
   * @img/colour 在真实包内必须存在（PRD 曾误列可删）
 """
+import os
 import shutil
 import subprocess
 import sys
@@ -17,7 +18,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SLIM = ROOT / "build" / "slim.py"
-DIST_DIR = ROOT / "build" / "dist_dir" / "Sketchfab下载器"
 
 PY = sys.executable
 
@@ -50,13 +50,17 @@ def fake_onedir(tmp_path):
     _touch(od / "_internal/node_modules/@emnapi/runtime.js")
     _touch(od / "_internal/node_modules/tslib/tslib.js")
     _touch(od / "_internal/engine/tools/wasm/decrypt.wasm", b"w" * 20000)
+    # S6 目标：legacy 解密后端（v1.1.3 起默认删除）
+    _touch(od / "_internal/engine/tools/binz/binzDecrypt.exe", b"MZ" + b"\0" * 500)
     return od
 
 
 def _run_slim(od: Path, *extra):
+    # 子进程强制 UTF-8：Windows 控制台默认 GBK，会把中文断言变成乱码（SFD-006）
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
     return subprocess.run([PY, str(SLIM), str(od), *extra],
                           capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", timeout=300)
+                          errors="replace", timeout=300, env=env)
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +84,7 @@ def test_dry_run_json_reports_planned_removals(fake_onedir):
     assert data["dry_run"] is True
     ids = {r["rule"] for r in data["removed"]}
     assert {"S1", "S2", "S3", "S4", "S5"} <= ids
-    assert "S6" not in ids, "S6 默认必须关闭（v1.1 保留 legacy 后端）"
+    assert "S6" in ids, "S6 默认开启：legacy binzDecrypt.exe 不再随包分发（v1.1.3 起）"
 
 
 # ---------------------------------------------------------------------------
@@ -138,17 +142,14 @@ def test_missing_twin_aborts(fake_onedir):
     assert (fake_onedir / VIPS_TOP).exists()
 
 
-def test_forbidden_rule_rejected():
+def test_forbidden_rule_rejected(qa_pkg):
     """规则命中保护清单（@img/colour）必须直接判失败。"""
     sys.path.insert(0, str(ROOT / "build"))
     import slim
     rule = slim.SlimRule(rule_id="X", rel_path=slim.MODULES + "/@img/colour",
                          kind="dir")
     s = slim.Slimmer(rules=[rule])
-    od = Path(DIST_DIR)
-    if not od.is_dir():
-        pytest.skip("真实包不存在")
-    results = s.guard_results(od)
+    results = s.guard_results(qa_pkg)
     assert results and results[0][1] is False
     assert "保护清单" in results[0][2]
 
@@ -157,36 +158,32 @@ def test_forbidden_rule_rejected():
 # 真实包检查
 # ---------------------------------------------------------------------------
 
-def test_colour_present_in_real_package():
-    if not DIST_DIR.is_dir():
-        pytest.skip("真实包不存在")
-    colour = DIST_DIR / "_internal" / "node_modules" / "@img" / "colour"
+def test_colour_present_in_real_package(qa_pkg):
+    colour = qa_pkg / "_internal" / "node_modules" / "@img" / "colour"
     assert colour.is_dir(), "@img/colour 不在包内（sharp 必挂）"
     # sharp 源码确实 require 它
-    colour_cjs = DIST_DIR / "_internal" / "node_modules" / "sharp" / "dist" / "colour.cjs"
+    colour_cjs = qa_pkg / "_internal" / "node_modules" / "sharp" / "dist" / "colour.cjs"
     assert "@img/colour" in colour_cjs.read_text(encoding="utf-8", errors="replace")
 
 
-def test_slimmed_files_gone_in_real_package():
-    """真实发布包里 S1~S5 的目标必须已经不存在（构建期瘦身后）。"""
-    if not DIST_DIR.is_dir():
-        pytest.skip("真实包不存在")
-    assert not (DIST_DIR / "_internal" / "libvips-42.dll").exists()
-    assert not (DIST_DIR / "_internal" / "libvips-cpp-8.18.7.dll").exists()
-    assert not (DIST_DIR / "_internal" / "node_modules" / "@img" / "sharp-wasm32").exists()
-    assert (DIST_DIR / "_internal" / "node_modules" / "@img" / "sharp-win32-x64").is_dir()
-    assert (DIST_DIR / "_internal" / "engine" / "tools" / "wasm" / "decrypt.wasm").is_file()
-    assert (DIST_DIR / "_internal" / "engine" / "tools" / "binz" / "binzDecrypt.exe").is_file()
+def test_slimmed_files_gone_in_real_package(qa_pkg):
+    """真实发布包里 S1~S6 的目标必须已经不存在（构建期瘦身后）。"""
+    internal = qa_pkg / "_internal"
+    assert not (internal / "libvips-42.dll").exists()
+    assert not (internal / "libvips-cpp-8.18.7.dll").exists()
+    assert not (internal / "node_modules" / "@img" / "sharp-wasm32").exists()
+    assert (internal / "node_modules" / "@img" / "sharp-win32-x64").is_dir()
+    assert (internal / "engine" / "tools" / "wasm" / "decrypt.wasm").is_file()
+    # S6：legacy 后端已不再分发（SFD-008 的“legacy 不可用”在打包层面的体现）
+    assert not (internal / "engine" / "tools" / "binz" / "binzDecrypt.exe").exists()
 
 
-def test_dry_run_on_real_package_is_noop():
+def test_dry_run_on_real_package_is_noop(qa_pkg):
     """对真实包跑 --dry-run：exit 0（守卫应视为无活干/全过），且不删任何文件。"""
-    if not DIST_DIR.is_dir():
-        pytest.skip("真实包不存在")
     def snapshot():
-        return {str(p): p.stat().st_size for p in DIST_DIR.rglob("*") if p.is_file()}
+        return {str(p): p.stat().st_size for p in qa_pkg.rglob("*") if p.is_file()}
     before = snapshot()
-    proc = _run_slim(DIST_DIR, "--dry-run")
+    proc = _run_slim(qa_pkg, "--dry-run")
     after = snapshot()
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert before == after

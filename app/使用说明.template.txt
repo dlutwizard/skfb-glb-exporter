@@ -35,11 +35,17 @@ exe 旁边的 _internal 文件夹是程序的一部分，缺了打不开。
 二、输出内容
 ------------
 输出目录\<模型名>-<ID前8位>\
-    ├── <模型名>_full.glb      ← 成品，材质贴图全在里面
-    ├── <模型名>.gltf          ← 无材质的旧式导出（备胎）
-    ├── model_file.bin         ← 网格数据
+    ├── <模型名>.glb           ← 成品，材质贴图都内嵌在里面
+    ├── <模型名>.gltf          ← 备用格式（转换失败时用它，贴图在 textures\ 里）
+    ├── info.json              ← 元信息：模型名、作者、授权、主交付物、贴图清单
+    ├── model_file.bin         ← 网格数据（原始分片，重转时用）
     ├── file.osgjs             ← 场景结构
-    └── textures\              ← 散装贴图
+    └── textures\              ← 散装贴图（已解密，和 GLB 里的一致）
+
+说明：
+  - 解密用的 key.txt / key2.txt 默认**不会**留在输出目录（v1.1.8 起），
+    需要排障时设环境变量 SKFB_KEEP_INTERMEDIATES=1 再跑。
+  - info.json 里的 "output" 指向主交付物，"deliverables" 列出全部可用文件。
 
 Blender 导入：File → Import → glTF 2.0 → 选 .glb
 按 Z 切到 Material Preview 才能看到材质效果。
@@ -49,13 +55,15 @@ Blender 导入：File → Import → glTF 2.0 → 选 .glb
 --------------------
 [1/3] 解析链接：短链跟随跳转，取出 32 位模型 UID，查官方 API 拿模型信息
 [2/3] 下载几何体：调用内置下载引擎，抓公开预览器的 .binz 分片并解密
-[3/3] 导出材质：调用扩展的 JS 转换器，逐张还原受保护的贴图（含 4K/8K），
+[3/3] 导出材质：读本地已下好的贴图并逐张解密（4K/8K 也一样），
       再把 osgjs 场景转成 glTF，贴图内嵌进 .glb
 
-解密有两条路：优先走 Node + WASM 的现代路径（程序会把随包的 node.exe
-放进 PATH，引擎自己能找到），找不到 Node 才回落到传统后端。
-想强制走传统后端排障时，在 config.json 里加 "decrypt_backend": "legacy"。
-用「关于 / 诊断」面板能直接看到当前实际生效的是哪一条。
+贴图只下载一次：引擎负责下载，转换器直接读本地文件并对受保护的图解密回写，
+所以 textures\ 里的图和 .glb 里的图是同一批（早期版本会下两遍，v1.1.8 已合并）。
+
+解密只有一条后端：Node + WASM（程序会把随包的 node.exe 放进 PATH，引擎自己找得到）。
+早期的 binzDecrypt.exe 传统后端因来源许可问题已从发布包移除，
+配置里再写 "decrypt_backend": "legacy" 也会自动按 WASM 处理。
 
 
 四、发给别人：对方需要做什么
@@ -116,8 +124,14 @@ Blender 导入：File → Import → glTF 2.0 → 选 .glb
     更新日志、依赖自检结果、当前数据目录
   - 升级方式：把新包解压后**覆盖**到旧目录即可，配置和已下载的模型都不受影响
     （配置存在 %APPDATA%\Sketchfab下载器\，不在程序目录里）
-  - 程序默认**不联网**。想检查更新需自行在「关于 / 诊断」里填更新源，
-    点「检查更新」才会发起一次 5 秒超时的请求，失败静默不打扰
+  - 联网说明（v1.1.8 起如实描述）：
+      · 下载模型时必然联网：只访问 sketchfab.com / *.sketchfab.com 与贴图 CDN
+      · 解析 skfb.ly 短链失败时会请求一次第三方还原服务 unshorten.me
+        （只发送那条短链，不含任何本地信息；不想要可用完整链接代替短链）
+      · 没有任何遥测、统计上报或后台自动更新
+      · 手动点「检查更新」才会再请求一次你配置的更新源（5 秒超时，失败静默）
+  - 数字签名：本程序未购买代码签名证书。Release 页每个包都附 SHA256SUMS.txt，
+    PowerShell 校验：Get-FileHash .\SketchfabDownloader_v*.zip -Algorithm SHA256
 
 本次更新摘要：
 {{CHANGELOG_TOP5}}
@@ -125,11 +139,13 @@ Blender 导入：File → Import → glTF 2.0 → 选 .glb
 
 八、开发环境（只有你自己改代码时才需要）
 ----------------------------------------
-  源码：   app\sketchfab_gui.py
-  引擎源： sketchfab-cli-main\（只读参考）
-  构建：   build\venv\Scripts\pyinstaller.exe
-  打包：   python build\build.py   （一条命令出 zip + 体积报告）
-  Python： 需要带 tkinter 的解释器（托管版没有 tkinter）
+  源码仓库： https://github.com/dlutwizard/skfb-glb-exporter （MIT）
+  界面：     app\sketchfab_gui.py
+  下载引擎： dist_engine\main.py、dist_engine\textures.py
+  转换器：   app\convert.mjs（Node，读本地贴图并内嵌到 GLB）
+  构建：     python build\build.py   （跑测试 → 打包 → 瘦身 → 自检 → 出 zip）
+  测试：     python -m pytest -q    （干净检出即可跑，无需发布包）
+  Python：   需要带 tkinter 的解释器（托管版没有 tkinter）
 
 程序找依赖的顺序是「随程序附带的 → 本机固定路径」，所以源码直接运行
 和打包成 exe 都能工作，不会互相干扰。
@@ -143,6 +159,11 @@ Windows 系统证书存储时可能抛 ASN1: NOT_ENOUGH_DATA。程序启动时�
 --------
 能下：公开模型（包括作者没开下载按钮的）、带贴图的、加密贴图可还原
 不能下：付费模型、私密模型、需要登录才能看的模型
+动画：**只导出静态几何 + 材质贴图，不含动画 / 骨骼 / 形变**。
+      模型含动画时，下载日志和 info.json 会明确写出来（animations.supported=false），
+      不会假装是"完整模型"。需要动画请用作者官方下载或 Sketchfab 导出。
+贴图：个别模型可能有个别贴图解不出来，这时日志会打警告、
+      info.json 的 texture_warnings 里也有记录，不会被悄悄吞掉
 速度：小组件一两分钟，高面数车模约一分半下载 + 几秒转换
 并行：同时下载数开太大不会更快 —— 解密贴图那步吃 CPU，带宽也有限，
       实测 2-3 个最划算；5 个以上反而互相拖慢

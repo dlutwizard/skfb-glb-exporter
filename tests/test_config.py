@@ -15,6 +15,16 @@ import pytest
 import diagnostics as diag
 
 
+def _gui():
+    """
+    取 GUI 模块；没有 tkinter 的环境（精简 Python / 无 tcl 的 Linux 镜像）
+    一律 skip，而不是让用例 error —— 干净环境要能只靠 pytest 判断"过没过"（SFD-006）。
+    """
+    pytest.importorskip("tkinter", reason="GUI 用例需要 tkinter")
+    import sketchfab_gui as gui
+    return gui
+
+
 # ---------------------------------------------------------------------------
 # resolve_cfg_paths：便携 / APPDATA 优先级
 # ---------------------------------------------------------------------------
@@ -95,38 +105,34 @@ def test_load_cfg_corrupt_file_tolerated(gui_module):
 
 
 # ---------------------------------------------------------------------------
-# default_out_dir：无 F 盘回退（R7 / 任务 D）
+# default_out_dir：跨机器可用（v1.1.7 起不再探测 F 盘）
 # ---------------------------------------------------------------------------
 
-def test_default_out_dir_without_f_drive(monkeypatch):
-    import sketchfab_gui as gui
-    real_exists = Path.exists
-    calls = []
-
-    def fake_exists(self):
-        if str(self).rstrip("\\/") in ("F:", "F:/"):
-            calls.append(str(self))
-            return False          # 模拟“别人电脑没有 F 盘”
-        return real_exists(self)
-
-    monkeypatch.setattr(Path, "exists", fake_exists)
-    result = gui.default_out_dir()
-    assert calls, "应该探测过 F 盘"
-    assert not result.startswith("F:"), "无 F 盘时不应返回 F:\\迅雷下载"
+def test_default_out_dir_uses_downloads_when_present(monkeypatch):
+    """有系统下载目录时返回 <下载>/Sketchfab模型，且一定是绝对路径。"""
+    gui = _gui()
     home = Path.home()
-    expected = None
-    for name in ("Downloads", "下载", "下载文件"):
-        if (home / name).is_dir():
-            expected = str(home / name / "Sketchfab模型")
-            break
-    assert result == (expected or str(home / "Sketchfab模型"))
+    real_is_dir = Path.is_dir
+
+    def fake_is_dir(self):
+        if str(self).replace("\\", "/").rstrip("/").lower().endswith(("/downloads", "/下载", "/下载文件")):
+            return True
+        return real_is_dir(self)
+
+    monkeypatch.setattr(Path, "is_dir", fake_is_dir)
+    result = gui.default_out_dir()
+    assert Path(result).is_absolute()
+    assert result.endswith("Sketchfab模型")
+    assert "迅雷" not in result, "不应再出现开发机专用路径"
 
 
-def test_default_out_dir_with_f_drive():
-    import sketchfab_gui as gui
-    from pathlib import Path as _P
-    if _P("F:/").exists():
-        assert gui.default_out_dir() == r"F:\迅雷下载"
+def test_default_out_dir_falls_back_to_home(monkeypatch):
+    """没有任何下载目录时退回家目录下的 Sketchfab模型。"""
+    gui = _gui()
+    real_is_dir = Path.is_dir
+    monkeypatch.setattr(Path, "is_dir", lambda self: False if "Sketchfab模型" not in str(self) else real_is_dir(self))
+    result = gui.default_out_dir()
+    assert result == str(Path.home() / "Sketchfab模型")
 
 
 # ---------------------------------------------------------------------------
@@ -134,25 +140,25 @@ def test_default_out_dir_with_f_drive():
 # ---------------------------------------------------------------------------
 
 def test_normalize_decrypt_mode():
-    import sketchfab_gui as gui
-    assert gui.normalize_decrypt_mode("legacy") == "legacy"
+    gui = _gui()
+    # legacy（binzDecrypt.exe）自 v1.1.3 随包移除，配置里残留时收敛到 auto
+    assert gui.normalize_decrypt_mode("legacy") == "auto"
     assert gui.normalize_decrypt_mode(" WASM ") == "wasm"
     assert gui.normalize_decrypt_mode("bogus") == "auto"
     assert gui.normalize_decrypt_mode(None) == "auto"
+    assert "legacy" not in gui.DECRYPT_MODES
 
 
-def test_apply_node_visibility_legacy_removes_res(tk_root):
-    """GUI 的 App.apply_node_visibility 是一键回滚开关（legacy = 剔除 RES）。"""
+def test_apply_node_visibility_always_keeps_res_on_path(tk_root):
+    """v1.1.8：只剩 WASM 后端，任何配置值都必须保证 RES 在 PATH 上（SFD-008）。"""
     import os
     import sketchfab_gui as gui
-    root = tk_root
-    app = gui.App(root)
+    app = gui.App(tk_root)
     app.apply_node_visibility("auto")
     assert any(os.path.normcase(str(gui.RES)) == os.path.normcase(p)
                for p in os.environ["PATH"].split(os.pathsep))
-    mode = app.apply_node_visibility("legacy")
-    assert mode == "legacy"
+    # 配置里残留 legacy 时收敛为 auto，但仍保留 RES（否则 node 找不到，直接不可用）
+    assert app.apply_node_visibility("legacy") == "auto"
     parts = [os.path.normcase(p) for p in os.environ["PATH"].split(os.pathsep)]
-    assert os.path.normcase(str(gui.RES)) not in parts, \
-        "legacy 模式必须把 RES 从 PATH 剔除"
+    assert os.path.normcase(str(gui.RES)) in parts
     assert app.apply_node_visibility("auto") == "auto"

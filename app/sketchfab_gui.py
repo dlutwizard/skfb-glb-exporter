@@ -187,7 +187,7 @@ PORTABLE = "--portable" in sys.argv          # 便携模式：强制写程序目
 APPDATA_ROOT = diag.appdata_root()
 CFG_WRITE, CFG_READ_FALLBACK = diag.resolve_cfg_paths(BASE, APPDATA_ROOT, PORTABLE)
 
-DECRYPT_MODES = ("auto", "wasm", "legacy")
+DECRYPT_MODES = ("auto", "wasm")
 
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
@@ -228,6 +228,26 @@ def step_progress(msg: str):
         done, total = int(m.group(1)), max(1, int(m.group(2)))
         return TEXTURE_BASE + TEXTURE_SPAN * (done / total), "下载并解密贴图 %d/%d" % (done, total)
     return None, None
+
+
+def humanize_progress(msg: str):
+    """
+    把需要「说人话」的引擎标记翻译成中文；返回 ``(文字, 是否告警)``。
+
+    返回 ``(None, False)`` 表示没有特殊含义，调用方按原样输出即可。
+    被翻译的标记不会再原样打印——否则 CLI 里会看到 ``step:tex_fail|...`` 这种天书。
+    """
+    text = (msg or "").strip()
+    if text.startswith("step:anim_warn|"):
+        n = text.split("|", 1)[1] if "|" in text else "?"
+        return ("注意：该模型含 %s 段动画，本工具导出静态几何 + 材质贴图，"
+                "不含动画/骨骼" % n, True)
+    if text.startswith("step:tex_fail|"):
+        parts = text.split("|")
+        name = parts[1] if len(parts) > 1 else "?"
+        err = parts[2] if len(parts) > 2 else ""
+        return ("贴图下载失败 %s：%s" % (name, err), True)
+    return (None, False)
 
 
 BG = "#f5f6f8"
@@ -328,7 +348,12 @@ def load_cli():
 
 
 def normalize_decrypt_mode(value) -> str:
-    """把配置值收敛到 auto / wasm / legacy 三者之一。"""
+    """
+    把配置值收敛到 auto / wasm 之一。
+
+    ``legacy``（binzDecrypt.exe）自 v1.1.3 起已随包移除——那个二进制来源无明确
+    许可，不再分发；配置里残留 ``legacy`` 时按 ``auto`` 处理，并在日志里提示。
+    """
     mode = str(value or "auto").strip().lower()
     return mode if mode in DECRYPT_MODES else "auto"
 
@@ -531,19 +556,18 @@ class App:
 
     def apply_node_visibility(self, mode=None):
         """
-        按 ``decrypt_backend`` 调整 PATH，返回实际生效的模式。
+        保证引擎能找到包内 node.exe，返回实际生效的模式。
 
-        * ``auto`` / ``wasm``：RES 在 PATH 最前 → 引擎 ``which("node")`` 成功 → WASM
-        * ``legacy``：把 RES 从 PATH 剔除 → 引擎找不到 node → 回落 binzDecrypt.exe
-
-        不改引擎一行代码就实现了「一键回滚」。
+        v1.1.8 起只剩 WASM 这一条解密后端：``legacy``（binzDecrypt.exe）已在
+        v1.1.3 随包移除（该二进制来源无明确许可），配置里写 ``legacy`` 会按
+        ``auto`` 处理并在这里提示一次，不再静默走一条根本不存在的路径。
         """
-        mode = normalize_decrypt_mode(mode if mode is not None
-                                      else self.cfg.get("decrypt_backend"))
-        if mode == "legacy":
-            remove_from_path(RES)
-        else:
-            prepend_to_path(RES)
+        raw = mode if mode is not None else self.cfg.get("decrypt_backend")
+        mode = normalize_decrypt_mode(raw)
+        if str(raw or "").strip().lower() == "legacy":
+            self.logline("⚠ 配置里的 decrypt_backend=legacy 已不再支持（传统后端已移除），"
+                         "已自动改用 WASM 后端。", WARN)
+        prepend_to_path(RES)
         return mode
 
     def precheck(self):
@@ -988,19 +1012,24 @@ class App:
                          daemon=True).start()
 
     def run_batch(self, links, out, conc, full=True):
-        # 进度回调是全局的，用线程局部变量区分是哪个任务的输出
+        # 进度回调**显式**传给每个下载任务（SFD-003）：
+        # 早期版本在批处理线程里 set_progress_callback()，靠 threading.local 传递，
+        # 但真正干活的 ThreadPoolExecutor 工作线程是另外的线程，local 里根本没有
+        # 这个回调 —— 结果下载阶段的 step:* 事件全丢，进度条只在任务结束时跳一下。
+        def _on_progress(m):
+            tag = getattr(_tls, "tag", "?")
+            human, warn = humanize_progress(m)
+            if human is not None:
+                self.q.put(("log", (f"{tag} {'⚠ ' if warn else ''}{human}", WARN if warn else None)))
+                return
+            self.q.put(("log", (f"{tag} {m}", None)))
+            idx = getattr(_tls, "idx", None)
+            frac, label = step_progress(m)
+            if idx is not None and frac is not None:
+                self.q.put(("progress", (idx, frac, label)))
+
         try:
-            cli = load_cli()
-
-            def _on_progress(m):
-                tag = getattr(_tls, "tag", "?")
-                self.q.put(("log", (f"{tag} {m}", None)))
-                idx = getattr(_tls, "idx", None)
-                frac, label = step_progress(m)
-                if idx is not None and frac is not None:
-                    self.q.put(("progress", (idx, frac, label)))
-
-            cli.set_progress_callback(_on_progress)
+            load_cli()
         except Exception as e:
             self.q.put(("log", (f"⚠ 下载引擎加载失败: {e}", ERR)))
 
@@ -1018,7 +1047,8 @@ class App:
                     _tls.tag = f"[{idx} {nm[:14]}]"
                 except Exception:
                     pass
-                name, summary, folder = download_task(url, out, full, log)
+                name, summary, folder = download_task(url, out, full, log,
+                                                      progress=_on_progress)
                 self.q.put(("task_done", (idx, True, name, summary, str(folder))))
             except Exception as e:
                 self.q.put(("task_done", (idx, False, url, str(e), None)))
@@ -1108,7 +1138,7 @@ def run_stream_cmd(cmd, cwd, log):
     return p.returncode
 
 
-def download_task(url, out, full=True, log=lambda t, c=None: None):
+def download_task(url, out, full=True, log=lambda t, c=None: None, progress=None):
     """下载单个模型并导出 GLB。界面与命令行模式共用，返回 (名称, 摘要, 目录)"""
     uid, final_url = resolve_and_uid(url, log)
     info = fetch_info(uid)
@@ -1116,25 +1146,85 @@ def download_task(url, out, full=True, log=lambda t, c=None: None):
     faces = info.get("faceCount") or 0
     lic = (info.get("license") or {}).get("label", "未知")
     open_dl = bool(info.get("isDownloadable"))
+    anims = int(info.get("animationCount") or 0)
     log(f"面数 {faces:,}｜{lic}｜官方下载 {'是' if open_dl else '否'}", None)
     if not open_dl:
         log("注意：作者未开放下载，仅供个人学习参考", WARN)
+    if anims:
+        # SFD-004：明确告知，避免用户以为拿到的是"完整还原"
+        log(f"注意：该模型含 {anims} 段动画，本工具导出的是静态几何 + 材质贴图，"
+            "不含动画/骨骼", WARN)
 
     cli = load_cli()
-    res = cli.download_one(final_url, out_root=Path(out))
+    # 回调显式下传：引擎只对「当前调用线程」生效，靠线程池自动继承是不成立的
+    res = cli.download_one(final_url, out_root=Path(out), progress=progress)
     folder = Path(res["dir"])
 
-    summary = "（仅几何体）"
+    summary = "（仅几何体，未导出 GLB）"
     if full:
-        out_glb = folder / f"{folder.name.rsplit('-', 1)[0]}_full.glb"
+        # 不再用 *_full.glb 这种容易误导的命名（SFD-004）
+        out_glb = folder / f"{folder.name.rsplit('-', 1)[0]}.glb"
         cmd = [str(NODE_EXE), str(CONVERT), uid, str(folder),
                str(out_glb), str(EXTLIB)]
         rc = run_stream_cmd(cmd, RES, log)
         if rc == 0 and out_glb.exists():
             summary = f"{out_glb.name}（{out_glb.stat().st_size / 1024 / 1024:.1f} MB）"
+            _absorb_convert_report(cli, folder, out_glb, log)
         else:
             summary = "GLB 未生成，可用 .gltf"
     return name, summary, folder
+
+
+def _absorb_convert_report(cli, folder: Path, out_glb: Path, log):
+    """
+    把 Node 转换报告并回 info.json，并把告警显示到界面上。
+
+    为什么要在 Python 侧补这一刀：GLB 是 download_one 返回**之后**才生成的，
+    那时 info.json 已经写好，主交付物还指向 .gltf；贴图解密失败、模型含动画
+    这些信息也只有转换阶段才知道（SFD-004 / SFD-011）。
+    """
+    report_path = Path(folder) / "convert_report.json"
+    report = {}
+    try:
+        if report_path.is_file():
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception:
+        report = {}
+
+    warnings = report.get("texture_warnings") or []
+    anims = int(report.get("animation_count") or 0)
+
+    fields = {
+        "primary": out_glb.name,
+        "output": str(out_glb),
+        "format": "glb",
+        "animations": {
+            "supported": False,
+            "count": anims,
+            "note": "本工具导出静态几何 + 材质贴图；动画/骨骼/形变不导出",
+        },
+    }
+    if report:
+        fields["textures_descrambled"] = report.get("textures_descrambled")
+        fields["texture_source"] = report.get("texture_source")
+    if warnings:
+        fields["texture_warnings"] = warnings
+
+    try:
+        cli.update_info_json(folder, **fields)
+    except Exception as e:
+        log(f"（info.json 更新失败：{e}）", WARN)
+
+    if warnings:
+        log(f"⚠ 有 {len(warnings)} 张贴图未能解密，成品里这些贴图可能显示异常", WARN)
+        for w in warnings[:5]:
+            log(f"   - {w.get('file')}: {w.get('reason')}", WARN)
+    if report.get("texture_source") == "network-fallback":
+        # 走到这里说明转换器没命中本地清单，贴图被第二次下载了——这正是 SFD-005
+        # 要消灭的行为，所以宁可吵一点也要让它暴露出来，而不是默默多花一倍流量。
+        log("⚠ 转换器未命中本地贴图清单，本次贴图重复下载了一次（不影响成品）", WARN)
+    if anims:
+        log(f"⚠ 模型含 {anims} 段动画，已按静态模型导出", WARN)
 
 
 def normalize_url(url: str) -> str:
@@ -1313,12 +1403,18 @@ def cli_mode(argv):
     print(f"并发: {conc}  模型数: {len(links)}  导出GLB: {'是' if full else '否'}", flush=True)
 
     try:
-        cli = load_cli()
-        cli.set_progress_callback(
-            lambda m: print(f"{getattr(_tls, 'tag', '?')} {m}", flush=True))
+        load_cli()
     except Exception as e:
         print(f"引擎加载失败: {e}", flush=True)
         return 1
+
+    # 与 GUI 同一个坑（SFD-003）：回调必须显式交给工作线程，不能只设在本线程
+    def on_progress(m):
+        human, warn = humanize_progress(m)
+        if human is not None:
+            print(f"{getattr(_tls, 'tag', '?')} {'⚠ ' if warn else ''}{human}", flush=True)
+            return
+        print(f"{getattr(_tls, 'tag', '?')} {m}", flush=True)
 
     fails = [0]
 
@@ -1331,7 +1427,7 @@ def cli_mode(argv):
 
         try:
             _tls.tag = f"[{idx} {url[-8:]}]"   # 拿到模型名之前先显示链接尾巴
-            name, summary, folder = download_task(url, out, full, log)
+            name, summary, folder = download_task(url, out, full, log, progress=on_progress)
             print(f"{tag} ✅ {name} → {summary}", flush=True)
             print(f"{tag}    目录: {folder}", flush=True)
         except Exception as e:

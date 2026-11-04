@@ -6,6 +6,52 @@
 打包时本文件会被复制到 `_internal/CHANGELOG.md`，「关于」面板离线读取它，
 因此日志正文必须是纯文本 Markdown，不要写图片或外链依赖。
 
+## [1.1.8] - 2026-11-04
+
+本轮对应独立审查 ROUND-01 的门禁项，编号沿用 `ISSUES.md` 的 SFD 编号。
+
+### 修复（阻塞项）
+- **SFD-003 并发进度回调丢失**：回调改为**显式参数**从批处理线程传给每个下载任务
+  （`download_one(..., progress=...)`）。此前靠 `threading.local`，但真正下载的
+  `ThreadPoolExecutor` 工作线程是另外的线程，local 里根本没有回调，导致下载阶段的
+  进度事件全丢、进度条只在任务完成时跳一下。GUI 与 CLI 两条路径均已修复。
+- **SFD-005 贴图双管线**：引擎下载的贴图与 Node 转换器重复下载同一批图（实测 36 张 + 14 张）。
+  现在引擎是唯一下载点，转换器改为读本地 `textures/` + `textures_manifest.json`，
+  就地解密并**回写**，散装贴图与 GLB 内嵌贴图完全一致；只在缺少 manifest 的历史目录上
+  才回退联网（兼容旧目录）。
+  - 复验补丁（自查发现，审查方尚未提出）：清单实际写在 `textures/` 子目录，而转换器只会
+    在模型根目录找，于是**每次**都判成"没有本地贴图"又联网抓了一遍——SFD-005 表面已修、
+    实际没接上。现改为两处都探；一旦走联网兜底，GUI 日志会显式告警。
+  - 复验补丁：引擎取清单用了不带参数的 `/textures`（全集 36 张），转换器用的是查看器端点
+    `?optimized=1`（14 张）。已统一为 optimized 优先、普通兜底，下载量与 GLB 内嵌张数对齐。
+- **SFD-006 测试不可复现**：移除 `F:\迅雷下载`、`v1.1.1.zip` 等本机路径与旧版本硬编码；
+  发布包 fixture 找不到时 `skip` 并给出获取方式（不再 `error`）；版本断言一律读
+  `app/version.py`；子进程统一 UTF-8。新增 `pytest.ini`、`requirements-dev.txt`、
+  GitHub Actions（Windows + 3.11/3.12，含"禁止关闭 TLS 校验"的静态扫描），
+  并把 `pytest` 设为 `build.py` 的**硬前置**（`--no-tests` 可跳过）。
+- **SFD-007 `info.json` 指向已删除的临时目录**：改为在目录原子替换**之后**写，
+  `output` 指向最终真实文件；新增 `primary` / `deliverables` 字段；
+  GUI 生成 GLB 后再回写一次，把主交付物切到 `.glb`。
+
+### 修复（不阻断项）
+- **SFD-010 输出卫生**：默认删除 `key.txt` / `key2.txt`（`SKFB_KEEP_INTERMEDIATES=1` 保留）；
+  保留清单从 `*.txt` 通配改为白名单；`info.json.textures` 只统计图片，
+  并新增 `texture_files` / `texture_manifest`。
+- **SFD-011 贴图解密失败可见**：转换器写 `convert_report.json` 汇总失败项，
+  GUI 显示警告并写入 `info.json.texture_warnings`，不再静默用原始字节冒充成品。
+
+### 变更（决策项）
+- **SFD-004 动画**：明确采用"书面豁免"路线——本工具只导出静态几何 + 材质贴图。
+  `animationCount > 0` 时 GUI/CLI 都会告警，`info.json.animations.supported = false`；
+  成品文件名去掉容易误导的 `_full` 后缀（`<模型名>_full.glb` → `<模型名>.glb`）。
+- **SFD-008 文档与打包声明**：
+  - 新增 `LICENSE` 与 `THIRD-PARTY-NOTICES.md` 到**发布包顶层**（MIT 合规）。
+  - 删除"legacy 后端可用/可回滚"表述：`decrypt_backend` 只剩 `auto` / `wasm`，
+    配置里残留 `legacy` 自动按 `auto` 处理并提示；引擎缺后端时给出明确中文错误。
+  - 更正"程序默认不联网"为"仅下载与手动检查更新时联网，无遥测、无后台自动更新"。
+  - 版本号单一真源：移除 `app/package.json` 的 `version` 字段，`version.py` 内部
+    注释里的 `1.1.0` 一并改掉；`version.json` 新增 `commit` 字段，发布物可反查源码版本。
+
 ## [1.1.7] - 2026-11-04
 
 ### 修复（数据安全）

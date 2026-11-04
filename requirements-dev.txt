@@ -1,0 +1,6 @@
+# 开发/测试依赖（运行时依赖全部随包，这里只列跑测试需要的）
+# 用法： python -m pip install -r requirements-dev.txt
+pytest>=8.0
+
+# 可选：读取发布 zip 内 exe 的 PE 版本号（缺失时相关用例自动 skip）
+pefile>=2023.2.7

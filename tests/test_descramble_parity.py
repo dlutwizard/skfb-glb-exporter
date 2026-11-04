@@ -18,7 +18,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-import numpy as np
+import pytest
+
+np = pytest.importorskip("numpy", reason="逐像素对照需要 numpy（pip install numpy）")
 
 ROOT = Path(__file__).resolve().parent.parent
 

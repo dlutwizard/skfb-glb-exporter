@@ -1,37 +1,79 @@
 # -*- coding: utf-8 -*-
-"""pytest 共享配置：把 app/ 加入 sys.path，提供被测 exe / 包路径 fixture。
-
-v1.1.1 变更（QA）：
-  * 包路径 fixture 拆成 ``qa_pkg``（包根目录）与 ``qa_exe``（可执行文件）两级，
-    让「只读包内容」的用例（CHANGELOG / version.json / 使用说明）在 exe 不可用时
-    依然能跑 —— 安全软件隔离 exe 不该连带包内容校验一起失败。
-  * ``qa_exe`` 缺失时 ``pytest.skip`` 而非 assert，避免把环境问题误报成用例失败
-    （skip 原因写明「被测 exe 不可用」，不会静默放过真实回归）。
 """
+pytest 共享配置。
+
+设计目标（SFD-006）：**干净检出即可跑**——不依赖任何本机路径、不依赖预置发布包。
+
+被测发布物的来源按优先级：
+  1. 环境变量 ``QA_PKG``（已解包的发布目录）/ ``QA_EXE``（可执行文件）
+  2. 环境变量 ``QA_RELEASE_ZIP``（发布 zip）
+  3. 仓库内 ``发布/Sketchfab下载器_v<当前版本>.zip``（构建后自动存在）
+  4. 都没有 → 相关用例 ``skip`` 并说明如何获取，**不报 error**
+
+第 3 种情况会自动解压到 pytest 临时目录，保证测的是真正的发布物，
+而不是构建中间产物。
+"""
+import json
 import os
+import re
 import sys
+import zipfile
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_DIR = ROOT / "app"
-for p in (str(APP_DIR), str(ROOT)):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+for _p in (str(APP_DIR), str(ROOT), str(Path(__file__).resolve().parent)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
-# QA 目标：默认用「从发布 zip 解包到全新临时目录」的那一份，
-# 保证测的是发布物而不是构建中间产物。
-_DEFAULT_PKG = Path(os.environ.get(
-    "QA_PKG",
-    r"F:\迅雷下载\_qa_v111_fresh\Sketchfab下载器"))
-QA_EXE = Path(os.environ.get("QA_EXE", str(_DEFAULT_PKG / "Sketchfab下载器.exe")))
-QA_RELEASE_ZIP = Path(os.environ.get(
-    "QA_RELEASE_ZIP", str(ROOT / "发布" / "Sketchfab下载器_v1.1.1.zip")))
+from version import __version__  # noqa: E402  （app/version.py，零依赖）
 
-import pytest  # noqa: E402
+
+def _default_release_zip() -> Path:
+    """发布目录里与当前版本匹配的 zip；没有就返回约定路径（用于 skip 提示）。"""
+    rel = ROOT / "发布"
+    exact = rel / ("Sketchfab下载器_v%s.zip" % __version__)
+    if exact.is_file():
+        return exact
+    cands = sorted(rel.glob("Sketchfab下载器_v*.zip"))
+    if cands:
+        return cands[-1]
+    return exact
+
+
+QA_PKG = Path(os.environ["QA_PKG"]) if os.environ.get("QA_PKG") else None
+QA_EXE = Path(os.environ["QA_EXE"]) if os.environ.get("QA_EXE") else None
+QA_RELEASE_ZIP_EXPLICIT = bool(os.environ.get("QA_RELEASE_ZIP"))
+QA_RELEASE_ZIP = Path(os.environ["QA_RELEASE_ZIP"]) if QA_RELEASE_ZIP_EXPLICIT else _default_release_zip()
+
+_HOWTO = (
+    "未找到发布包。三种提供方式任选其一：\n"
+    "  1) 构建：python build/build.py（会在 发布/ 生成 zip）\n"
+    "  2) 设 QA_RELEASE_ZIP=<发布 zip 路径>\n"
+    "  3) 设 QA_PKG=<已解包的发布目录>"
+)
+
+
+def _zip_version(path: Path) -> str:
+    """从发布 zip 里读 version.json 的版本号；读不到就退回文件名推断。"""
+    try:
+        with zipfile.ZipFile(path) as z:
+            for name in z.namelist():
+                if name.endswith("version.json") and name.count("/") <= 1:
+                    try:
+                        return str(json.loads(z.read(name).decode("utf-8")).get("version") or "")
+                    except Exception:                       # noqa: BLE001
+                        continue
+    except Exception:                                       # noqa: BLE001
+        pass
+    m = re.search(r"_v([0-9][0-9.]*)\.zip$", path.name)
+    return m.group(1) if m else ""
 
 
 def qa_exe_healthy(pkg: Path) -> bool:
-    """exe 是否真的可用（存在且体积合理；被隔离时通常直接消失或不可读）。"""
+    """exe 是否可用（存在且体积合理；被安全软件隔离时通常直接消失）。"""
     exe = pkg / "Sketchfab下载器.exe"
     try:
         return exe.is_file() and exe.stat().st_size > 1_000_000
@@ -39,18 +81,43 @@ def qa_exe_healthy(pkg: Path) -> bool:
         return False
 
 
-@pytest.fixture(scope="session")
-def qa_pkg() -> Path:
-    """发布包根目录（含 _internal / version.json / 使用说明.txt）。"""
-    pkg = QA_EXE.parent
-    assert pkg.is_dir(), "找不到发布包解包目录：%s" % pkg
+def _unwrap(pkg: Path) -> Path:
+    """发布 zip 顶层带一层 ``Sketchfab下载器/``；指向父目录时自动下钻。"""
+    if (pkg / "Sketchfab下载器.exe").is_file() or (pkg / "_internal").is_dir():
+        return pkg
+    inner = pkg / "Sketchfab下载器"
+    if (inner / "_internal").is_dir() or (inner / "Sketchfab下载器.exe").is_file():
+        return inner
     return pkg
+
+
+@pytest.fixture(scope="session")
+def qa_pkg(tmp_path_factory) -> Path:
+    """发布包根目录（含 _internal / version.json / 使用说明.txt）。"""
+    if QA_PKG is not None:
+        pkg = _unwrap(QA_PKG)
+        if not (pkg / "_internal").is_dir():
+            pytest.skip("QA_PKG 不是有效的发布目录：%s" % QA_PKG)
+        return pkg
+    if QA_EXE is not None and QA_EXE.parent.is_dir():
+        return _unwrap(QA_EXE.parent)
+    if QA_RELEASE_ZIP.is_file():
+        got = _zip_version(QA_RELEASE_ZIP)
+        if got and got != __version__ and not QA_RELEASE_ZIP_EXPLICIT:
+            pytest.skip("发布包是 v%s，源码是 v%s —— 先构建再跑发布物用例（%s）"
+                        % (got, __version__, QA_RELEASE_ZIP.name))
+        dest = tmp_path_factory.mktemp("qa_pkg")
+        with zipfile.ZipFile(QA_RELEASE_ZIP) as z:
+            z.extractall(dest)
+        return _unwrap(dest)
+    pytest.skip(_HOWTO + "\n（当前期望路径：%s）" % QA_RELEASE_ZIP)
 
 
 @pytest.fixture(scope="session")
 def qa_res(qa_pkg: Path) -> Path:
     res = qa_pkg / "_internal"
-    assert res.is_dir(), "发布包缺少 _internal：%s" % res
+    if not res.is_dir():
+        pytest.skip("发布包缺少 _internal：%s" % res)
     return res
 
 
@@ -67,7 +134,10 @@ def qa_exe(qa_pkg: Path) -> Path:
 def release_zip() -> Path:
     """发布 zip 本体：用于「不执行 exe 也能校验」的静态用例（PE 版本号等）。"""
     if not QA_RELEASE_ZIP.is_file():
-        pytest.skip("找不到发布 zip：%s" % QA_RELEASE_ZIP)
+        pytest.skip(_HOWTO + "\n（当前期望路径：%s）" % QA_RELEASE_ZIP)
+    got = _zip_version(QA_RELEASE_ZIP)
+    if got and got != __version__ and not QA_RELEASE_ZIP_EXPLICIT:
+        pytest.skip("发布包是 v%s，源码是 v%s —— 先构建再跑发布物用例" % (got, __version__))
     return QA_RELEASE_ZIP
 
 

@@ -11,6 +11,8 @@ Output: glTF (+ textures when available) in the downloads/ folder.
 
 Local key.txt / key2.txt written during decrypt are NOT API keys —
 they are one-time mesh decryption material taken from the public page.
+Since v1.1.8 they are deleted after a successful decrypt; set
+SKFB_KEEP_INTERMEDIATES=1 to keep them for debugging.
 """
 
 from __future__ import annotations
@@ -41,6 +43,14 @@ ROOT = Path(__file__).resolve().parent
 DOWNLOADS = ROOT / "downloads"
 BINZ_DECRYPT = ROOT / "tools" / "binz" / "binzDecrypt.exe"
 OSGCONV = ROOT / "tools" / "OsgConv" / "osgconv.exe"
+
+# 贴图扩展名白名单：统计 info.json.textures 时只算图片，不把 manifest 算进去
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+# 排障开关：默认丢弃 key.txt / key2.txt 等中间材料（SFD-010）
+KEEP_INTERMEDIATES = os.environ.get("SKFB_KEEP_INTERMEDIATES", "").strip().lower() not in (
+    "", "0", "false", "no", "off",
+)
 
 # Runtime options (CLI / library helpers)
 #
@@ -883,9 +893,9 @@ def decrypt_binz(
             run_tool([str(BINZ_DECRYPT), "key.txt", path.name], cwd=work_dir)
     else:
         raise FileNotFoundError(
-            "No decrypt backend.\n"
-            "Need tools/wasm/ (decrypt_worker.mjs + decrypt.wasm) and Node.js,\n"
-            "or tools/binz/binzDecrypt.exe (+ Wine on Linux)."
+            "没有可用的解密后端。\n"
+            "需要 tools/wasm/（decrypt_worker.mjs + decrypt.wasm）与 Node.js；"
+            "传统后端 binzDecrypt.exe 自 v1.1.3 起已从发布包移除（该二进制来源无明确许可）。"
         )
 
     produced = [
@@ -1200,6 +1210,7 @@ def download_one(
             prepare_legacy_gz(out_dir)
 
         # Textures (public texture API — no Sketchfab login)
+        # v1.1.8：这里是唯一的贴图下载点，Node 转换器改为读本地 textures/（SFD-005）
         tex_map: dict = {}
         try:
             from textures import download_textures
@@ -1220,7 +1231,16 @@ def download_one(
             out_dir, model_name, texture_map=tex_map, prefer="gltf"
         )
 
-        # Keep user-facing assets: glTF (or raw osgjs/bin) + textures
+        # 解密材料用完即弃：key.txt / key2.txt 对外发目录毫无意义，还是可复用的
+        # 解密材料。需要排障时用 SKFB_KEEP_INTERMEDIATES=1 保留（SFD-010）。
+        if not KEEP_INTERMEDIATES:
+            for _k in ("key.txt", "key2.txt"):
+                try:
+                    (out_dir / _k).unlink()
+                except OSError:
+                    pass
+
+        # Keep user-facing assets：白名单，不再用 *.txt 通配（SFD-010）
         final_keep = {
             model_path.name,
             "info.json",
@@ -1229,43 +1249,14 @@ def download_one(
             "model_file.bin",
             "model_file_wireframe.bin",
         }
-        for p in out_dir.glob("*.gltf"):
-            final_keep.add(p.name)
-        for p in out_dir.glob("*.glb"):
-            final_keep.add(p.name)
-        for p in out_dir.glob("*.bin"):
-            # keep gltf sidecars + mesh bins
-            final_keep.add(p.name)
-        for p in out_dir.glob("*.txt"):
-            final_keep.add(p.name)
-        for p in out_dir.glob("*.obj"):
-            final_keep.add(p.name)
-        for p in out_dir.glob("*.mtl"):
-            final_keep.add(p.name)
+        for pat in ("*.gltf", "*.glb", "*.bin", "*.obj", "*.mtl"):
+            for p in out_dir.glob(pat):
+                final_keep.add(p.name)
+        if KEEP_INTERMEDIATES:
+            final_keep |= {"key.txt", "key2.txt"}
 
         cleanup_work_dir(out_dir, final_keep)
 
-        # Prefer largest glTF/GLB as main deliverable if present
-        gltfs = list(out_dir.glob("*.gltf")) + list(out_dir.glob("*.glb"))
-        if gltfs:
-            model_path = max(gltfs, key=lambda p: p.stat().st_size)
-
-        meta = {
-            "uid": uid,
-            "name": display_name,
-            "file_name": model_name,
-            "author": author,
-            "description": description,
-            "source_url": url.strip(),
-            "output": str(model_path),
-            "format": model_path.suffix.lower().lstrip("."),
-            "textures": len(list((out_dir / "textures").glob("*"))) if (out_dir / "textures").is_dir() else 0,
-            "note": "Prefer glTF via osgconv; fallback pure-python glTF; textures in textures/",
-        }
-        (out_dir / "info.json").write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
         # 全部产物就绪 → 原子替换旧目录（旧目录先改名备份，替换失败自动回滚）
         backup = None
         if final_dir.exists():
@@ -1281,7 +1272,52 @@ def download_one(
         if backup is not None:
             shutil.rmtree(backup, ignore_errors=True)
         out_dir = final_dir
-        model_path = final_dir / model_path.name
+
+        # Prefer largest glTF/GLB as main deliverable if present
+        gltfs = list(out_dir.glob("*.gltf")) + list(out_dir.glob("*.glb"))
+        if gltfs:
+            model_path = max(gltfs, key=lambda p: p.stat().st_size)
+        else:
+            model_path = final_dir / model_path.name
+
+        # info.json 必须在 rename **之后**写：之前写在 .sftmp-* 里，
+        # 目录被改名后 output 指向一个已经不存在的路径（SFD-007）。
+        tex_files = sorted(
+            p.name for p in (out_dir / "textures").glob("*")
+            if p.suffix.lower() in IMAGE_EXTS
+        ) if (out_dir / "textures").is_dir() else []
+        anim_count = int(viewer_info.get("animationCount") or 0)
+        meta = {
+            "uid": uid,
+            "name": display_name,
+            "file_name": model_name,
+            "author": author,
+            "description": description,
+            "source_url": url.strip(),
+            "output": str(model_path),
+            "primary": model_path.name,
+            "format": model_path.suffix.lower().lstrip("."),
+            "deliverables": sorted(
+                p.name for p in out_dir.iterdir()
+                if p.is_file() and p.suffix.lower() in {".glb", ".gltf", ".bin"}
+            ),
+            "textures": len(tex_files),
+            "texture_files": tex_files,
+            "texture_manifest": "textures/textures_manifest.json"
+            if (out_dir / "textures" / "textures_manifest.json").is_file() else None,
+            "animations": {
+                "supported": False,
+                "count": anim_count,
+                "note": "本工具导出静态几何 + 材质贴图；动画/骨骼/形变不导出",
+            },
+            "note": "glTF 为主交付物；GLB 由 GUI 转换后追加到本文件",
+        }
+        (out_dir / "info.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        if anim_count:
+            _progress(f"step:anim_warn|{anim_count}")
 
         _progress("step:done")
         return {
@@ -1303,6 +1339,57 @@ def download_one(
             pass
         set_proxy(prev_proxy)
         set_progress_callback(prev_cb)
+
+
+def update_info_json(folder: Path, **fields) -> Optional[dict]:
+    """
+    合并更新输出目录里的 info.json（GUI 生成 GLB 之后调用）。
+
+    GLB 由 Node 转换器在 Python 侧返回**之后**才产生，所以 download_one 写的
+    info.json 只知道 glTF。这里把主交付物改成实际的 GLB，并追加转换报告里的
+    动画/贴图告警（SFD-007 / SFD-004 / SFD-011）。
+
+    返回更新后的字典；info.json 不存在时返回 None（不新建，避免掩盖异常）。
+    """
+    folder = Path(folder)
+    path = folder / "info.json"
+    if not path.is_file():
+        return None
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(meta, dict):
+        return None
+
+    meta.update(fields)
+
+    primary = meta.get("primary")
+    if primary:
+        target = folder / str(primary)
+        if target.is_file():
+            meta["output"] = str(target)
+            meta["format"] = target.suffix.lower().lstrip(".")
+
+    files = []
+    for p in sorted(folder.iterdir()):
+        if p.is_file() and p.suffix.lower() in {".glb", ".gltf", ".bin"}:
+            files.append(p.name)
+    if files:
+        meta["deliverables"] = files
+    # 转换阶段会把解密的 .jpg 改写成 .png，所以贴图清单要在此时重算一次
+    if (folder / "textures").is_dir():
+        img_files = sorted(
+            p.name for p in (folder / "textures").glob("*")
+            if p.suffix.lower() in IMAGE_EXTS
+        )
+        meta["textures"] = len(img_files)
+        meta["texture_files"] = img_files
+    else:
+        meta["textures"] = 0
+
+    path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return meta
 
 
 # ---------------------------------------------------------------------------

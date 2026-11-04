@@ -12,8 +12,8 @@
 
 APP_NAME = "Sketchfab下载器"
 APP_ID = "SketchfabDownloader"       # exe 的 InternalName
-__version__ = "1.1.7"                # ← 改版本号只改这一行
-VERSION_TUPLE = (1, 1, 7)            # 必须与 __version__ 一致（模块尾断言）
+__version__ = "1.1.8"                # ← 改版本号只改这一行
+VERSION_TUPLE = (1, 1, 8)            # 必须与 __version__ 一致（模块尾断言）
 
 # ---- 更新检查（默认全关：未配置时零网络请求）----------------------------
 GITHUB_REPO = ""                     # "owner/name"；空 = 更新检查整体关闭
@@ -33,7 +33,7 @@ _SEPARATORS = ".-_+~ "
 
 
 def version_string() -> str:
-    """返回形如 ``"1.1.0"`` 的版本字符串。"""
+    """返回形如 ``"1.2.3"`` 的版本字符串。"""
     return __version__
 
 
@@ -70,7 +70,7 @@ def parse_version(s) -> tuple:
 
 
 def dotted(t) -> str:
-    """把整数元组还原成 ``"1.1.0"`` 形式的点分字符串。"""
+    """把整数元组还原成 ``"1.2.3"`` 形式的点分字符串。"""
     if not t:
         return ""
     try:
@@ -115,5 +115,5 @@ assert VERSION_TUPLE == tuple(int(x) for x in __version__.split(".")), (
 
 
 if __name__ == "__main__":
-    # 验收用：`python app/version.py` 必须输出 1.1.0
+    # 验收用：`python app/version.py` 必须输出当前版本号（与 __version__ 一致）
     print(__version__)

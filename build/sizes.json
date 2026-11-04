@@ -233,5 +233,32 @@
       "engine": 423329,
       "node_modules": 20981702
     }
+  },
+  {
+    "version": "1.1.8",
+    "build_date": "2026-11-04",
+    "onedir_bytes": 138918923,
+    "zip_bytes": 55660474,
+    "startup_sec": 0.9,
+    "zip_files": 1157,
+    "slim_rules": [
+      "S1",
+      "S2",
+      "S3",
+      "S4",
+      "S5"
+    ],
+    "decrypt_backend": "wasm",
+    "components": {
+      "node_exe": 87074816,
+      "libvips_dup": 0,
+      "binzDecrypt_exe": 0,
+      "sharp_wasm32": 0,
+      "emnapi": 0,
+      "tslib": 0,
+      "sharp_win32_x64": 19812379,
+      "engine": 455987,
+      "node_modules": 20981702
+    }
   }
 ]

@@ -6,6 +6,9 @@
 
 Windows 桌面应用（tkinter），带批量并行下载、进度条、依赖自检、一键构建。
 
+**能导出什么**：静态几何 + 材质贴图（`.glb` / `.gltf`）。
+**不导出什么**：动画、骨骼、形变目标——模型含动画时日志与 `info.json` 会明确标注，不做"完整还原"的暗示。
+
 ---
 
 ## 免责声明
@@ -29,7 +32,8 @@ Windows 桌面应用（tkinter），带批量并行下载、进度条、依赖�
 
 **发布包校验**：每个 Release 附带 `SHA256SUMS.txt`，下载后可用
 `certutil -hashfile SketchfabDownloader_vX.Y.Z.zip SHA256` 比对。EXE 未做代码签名，
-于是 SmartScreen 首次运行会提示“未知发布者”。
+于是 SmartScreen 首次运行会提示“未知发布者”。发布包顶层同时带有 `LICENSE` 与
+`THIRD-PARTY-NOTICES.md`（MIT 要求随副本分发许可声明）。
 
 ---
 
@@ -78,9 +82,12 @@ python app/sketchfab_gui.py --selftest     # 只建界面，输出 SELFTEST_OK
 ## 构建
 
 ```bash
-pip install pyinstaller==6.10.0     # 版本必须锁 6.10.x，见下
-python build/build.py               # 一条命令出 zip + 体积报告
+pip install -r requirements-dev.txt  # pytest（+ 可选 pefile）
+pip install pyinstaller==6.10.0      # 版本必须锁 6.10.x，见下
+python build/build.py                # 测试门禁 → 打包 → 瘦身 → 出 zip
 ```
+
+`build.py` 会**先跑一遍 `pytest`**，测试不过直接中止（`--no-tests` 可跳过，正常发版别用）。
 
 两个硬性前提：
 
@@ -90,9 +97,24 @@ python build/build.py               # 一条命令出 zip + 体积报告
 2. **`node.exe` 要放在仓库根目录**，或用 `SFD_NODE_EXE` 指定。它会被打进包里，
    让引擎的 WASM 解密可用。
 
-构建流水线：读版本 → 生成元文件 → PyInstaller → 瘦身（带守卫）→ 写 exe 版本信息 →
-体积闸门 → 打包 zip → 记体积账本。瘦身规则见 `build/slim.py`，每条都要求「替代实现到位」
+构建流水线：**跑测试** → 读版本 → 生成元文件 → PyInstaller → 瘦身（带守卫）→
+写 exe 版本信息 → 体积闸门 → 打包 zip（含 LICENSE / THIRD-PARTY-NOTICES）→
+记体积账本 → 自动清理中间产物。瘦身规则见 `build/slim.py`，每条都要求「替代实现到位」
 或「引用扫描 0 命中」才允许删除，守卫不过直接退出、一个字节都不删。
+
+---
+
+## 测试
+
+```bash
+python -m pytest -q          # 干净检出即可运行，不需要先构建
+```
+
+- 引擎流水线用例全部离线（网络与 Node 都 mock 掉）：进度回调并发、原子替换回滚、
+  `info.json` 路径、贴图选择。
+- 发布包相关用例在没有 zip 时自动 `skip` 并说明怎么获取（构建一次，或设 `QA_RELEASE_ZIP`）。
+- CI：`.github/workflows/ci.yml` 在 Windows + Python 3.11/3.12 上跑全量测试，
+  并静态扫描「关闭 TLS 校验」的代码。
 
 ---
 

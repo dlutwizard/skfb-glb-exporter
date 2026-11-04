@@ -1,6 +1,6 @@
 {
   "name": "skfb-glb-exporter",
-  "version": "1.1.2",
+  "_comment": "版本号唯一真源是 app/version.py；本文件只用于安装 sharp，不再声明 version（SFD-008）",
   "description": "Sketchfab 公开模型导出 GLB 所需的图像处理依赖",
   "private": true,
   "license": "MIT",

@@ -31,6 +31,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 from datetime import datetime
@@ -355,14 +356,19 @@ def build_info_payload(version: str, build_date: str,
 
 
 def write_version_json(target: Path, version: str, build_date: str,
-                       notes: str) -> Path:
-    """包根 version.json（给排障与「检查更新」参照）。"""
+                       notes: str, commit: str = "") -> Path:
+    """包根 version.json（给排障与「检查更新」参照）。
+
+    ``commit`` 让发布物能反查到具体源码版本（SFD-007/ROUND-01 建议）：
+    以前只能靠人工比对文件哈希，现在 version.json 里直接写着。
+    """
     payload = {
         "schema": 1,
         "app": "sketchfab_downloader",
         "version": version,
         "build_date": build_date,
         "channel": "stable",
+        "commit": commit or "unknown",
         "url": "",
         "notes": notes,
         "min_version": "1.0.0",
@@ -370,6 +376,36 @@ def write_version_json(target: Path, version: str, build_date: str,
     target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
                       encoding="utf-8")
     return target
+
+
+def git_commit() -> str:
+    """当前 HEAD 的短哈希；非 git 环境（源码压缩包）返回空串。"""
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short=7", "HEAD"], cwd=str(ROOT),
+                             capture_output=True, text=True, timeout=20)
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def changelog_headline(version: str) -> str:
+    """取 CHANGELOG 中当前版本条目的第一句，作为 version.json 的 notes。"""
+    try:
+        lines = CHANGELOG.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return "v%s" % version
+    inside = False
+    for line in lines:
+        if line.startswith("## "):
+            inside = version in line
+            continue
+        if not inside:
+            continue
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        return text.lstrip("-").strip()
+    return "v%s" % version
 
 
 # ---------------------------------------------------------------- 构建步骤
@@ -623,6 +659,27 @@ def verify_package(onedir: Path, version: str) -> None:
     for psutil_hit in list(internal.glob("psutil*")):
         problems.append("包内出现 psutil（dev-only 依赖混入）：%s" % psutil_hit.name)
 
+    # SFD-008：MIT 要求随副本分发许可声明；顶层没有就等于没给用户看
+    for name in ("LICENSE", "THIRD-PARTY-NOTICES.md"):
+        if not (onedir / name).is_file():
+            problems.append("发布包顶层缺少 %s（MIT 合规要求）" % name)
+
+    # SFD-008：version.json 必须能反查源码版本，且与 version.py 一致
+    vj = onedir / "version.json"
+    if not vj.is_file():
+        problems.append("缺少 version.json")
+    else:
+        try:
+            payload = json.loads(vj.read_text(encoding="utf-8"))
+        except Exception as exc:                       # noqa: BLE001
+            problems.append("version.json 无法解析：%s" % exc)
+            payload = {}
+        if payload.get("version") != version:
+            problems.append("version.json 的 version=%r 与 %s 不一致"
+                            % (payload.get("version"), version))
+        if not str(payload.get("commit") or "").strip():
+            problems.append("version.json 缺 commit 字段（无法反查源码版本）")
+
     if problems:
         raise BuildError("包内检查未通过：\n  - " + "\n  - ".join(problems), 6)
 
@@ -796,8 +853,56 @@ def write_report(version: str, build_date: str, onedir_bytes: int, zip_bytes: in
 
 
 # ---------------------------------------------------------------- 主流程
+def _python_with_pytest() -> Optional[str]:
+    """找一个能 import pytest 的解释器（优先显式指定，其次当前，再次构建 venv）。"""
+    for py in (os.environ.get("SFD_TEST_PY"), sys.executable, str(VENV_PY)):
+        if not py or not Path(py).is_file():
+            continue
+        try:
+            probe = subprocess.run([py, "-c", "import pytest"], capture_output=True,
+                                   timeout=120)
+        except Exception:
+            continue
+        if probe.returncode == 0:
+            return py
+    return None
+
+
+def run_test_gate() -> None:
+    """
+    发布门禁：**测试不过就不许打包**（SFD-006）。
+
+    以前 build.py 只做 exe 自检，测试套件和发布流程完全脱钩，别人克隆下来
+    pytest 是红的也照样能出包。这里把它变成硬前置。
+    """
+    step("0/9 测试门禁（pytest）")
+    py = _python_with_pytest()
+    if py is None:
+        log("· 当前解释器与构建 venv 都没有 pytest，尝试装到 venv…")
+        try:
+            subprocess.call([str(VENV_PY), "-m", "pip", "install", "-q", "pytest"])
+        except Exception:
+            pass
+        py = _python_with_pytest()
+    if py is None:
+        raise BuildError(
+            "找不到带 pytest 的解释器，无法执行发布门禁。\n"
+            "请先 pip install -r requirements-dev.txt（或加 --no-tests 跳过）", 3)
+    log("· 用 %s 运行 tests/" % py)
+    # 显式指定 basetemp：pytest 默认会在系统临时目录里滚动清理旧的 pytest-N 目录，
+    # 在受限/加固环境（安全软件、沙箱）下这次批量删除可能被拦截，进而污染退出码。
+    basetemp = Path(tempfile.gettempdir()) / ("sfd-pytest-%d" % os.getpid())
+    rc = subprocess.call([py, "-m", "pytest", "-q", "--basetemp=%s" % basetemp],
+                         cwd=str(ROOT))
+    if rc != 0:
+        raise BuildError("测试未通过（pytest 退出码 %d），已中止构建" % rc, 3)
+    log("· 测试通过，继续打包")
+
+
 def run(args: argparse.Namespace) -> int:
     started = time.time()
+    if not getattr(args, "no_tests", False):
+        run_test_gate()
     step("1/9 读取版本真源")
     ns = load_version_namespace()
     version = str(ns["__version__"])
@@ -870,8 +975,14 @@ def run(args: argparse.Namespace) -> int:
                                       build_ts=build_ts),
                    ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     write_version_json(onedir / "version.json", version, build_date,
-                       "v%s：版本体系 / 一键构建 / 零风险瘦身 / 配置与程序分离" % version)
-    log("· 已写入 _internal/CHANGELOG.md、_internal/build_info.json、version.json")
+                       "v%s：%s" % (version, changelog_headline(version)),
+                       commit=git_commit())
+    # MIT 要求随副本分发许可声明：放到发布包顶层，用户解压就能看到（SFD-008）
+    for extra in (ROOT / "LICENSE", ROOT / "THIRD-PARTY-NOTICES.md"):
+        if extra.is_file():
+            shutil.copy2(extra, onedir / extra.name)
+    log("· 已写入 _internal/CHANGELOG.md、_internal/build_info.json、version.json、"
+        "LICENSE、THIRD-PARTY-NOTICES.md")
 
     readme_final = render_readme(version, build_date, onedir_mb=onedir_mb,
                                  startup_sec=None)
@@ -952,6 +1063,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="保留 binzDecrypt.exe（S6，默认删除：该二进制来源无明确许可）")
     parser.add_argument("--no-clean", action="store_true",
                         help="跳过构建后的自动清理（默认构建结束即清理中间产物）")
+    parser.add_argument("--no-tests", action="store_true",
+                        help="跳过发布门禁（pytest）。正常发版不要用")
     args = parser.parse_args(argv)
 
     ensure_build_python(argv)
