@@ -51,6 +51,7 @@ if str(_APP_DIR) not in sys.path:
 
 import diagnostics as diag                                     # noqa: E402
 import sketchfab_search as sfsearch                            # noqa: E402
+import ui_theme as theme                                       # noqa: E402
 import update_checker                                          # noqa: E402
 from version import (APP_ID, APP_NAME, CHANGELOG_HEAD, SINGLE_FILE_EXPERIMENTAL,  # noqa: E402
                      VERSION_TUPLE, __version__)
@@ -251,14 +252,17 @@ def humanize_progress(msg: str):
     return (None, False)
 
 
-BG = "#f5f6f8"
-CARD = "#ffffff"
-ACCENT = "#2f6fed"
-TEXT = "#1f2328"
-MUTED = "#6b7280"
-OK = "#15803d"
-WARN = "#b45309"
-ERR = "#b91c1c"
+# ---------------- 视觉设计令牌 ----------------
+# 单一真源在 ui_theme.py；这里保留旧名字，让日志着色、打赏/关于面板等
+# 沿用已久的调用点不必改动，也不会再散落一套互相打架的十六进制色值。
+BG = theme.BG
+CARD = theme.CARD
+ACCENT = theme.ACCENT
+TEXT = theme.TEXT
+MUTED = theme.MUTED
+OK = theme.OK
+WARN = theme.WARN
+ERR = theme.ERR
 
 # 线程局部：给每个并行任务的日志打上标签
 _tls = threading.local()
@@ -380,8 +384,8 @@ class App:
         self.update_result = None
 
         root.title("Sketchfab 模型下载器 v" + __version__)
-        root.geometry("860x700")
-        root.minsize(760, 620)
+        root.geometry("960x860")
+        root.minsize(880, 740)
         root.configure(bg=BG)
         try:
             if ICON.exists():
@@ -390,135 +394,172 @@ class App:
             pass
 
         style = ttk.Style()
-        try:
-            style.theme_use("clam")
-        except Exception:
-            pass
-        style.configure("TFrame", background=BG)
-        style.configure("Card.TFrame", background=CARD)
-        style.configure("TLabel", background=BG, foreground=TEXT,
-                        font=("Microsoft YaHei UI", 10))
-        style.configure("Card.TLabel", background=CARD, foreground=TEXT,
-                        font=("Microsoft YaHei UI", 10))
-        style.configure("Title.TLabel", background=BG, foreground=TEXT,
-                        font=("Microsoft YaHei UI", 16, "bold"))
-        style.configure("Sub.TLabel", background=BG, foreground=MUTED,
-                        font=("Microsoft YaHei UI", 9))
-        style.configure("Ver.TLabel", background=BG, foreground=ACCENT,
-                        font=("Microsoft YaHei UI", 9, "bold"))
-        style.configure("TButton", font=("Microsoft YaHei UI", 10), padding=(14, 7))
-        style.configure("Accent.TButton", font=("Microsoft YaHei UI", 11, "bold"),
-                        padding=(18, 10), background=ACCENT, foreground="white")
-        style.map("Accent.TButton",
-                  background=[("active", "#2559c9"), ("disabled", "#a9bdf0")],
-                  foreground=[("disabled", "#eef2ff")])
-        style.configure("TCheckbutton", background=CARD, foreground=TEXT,
-                        font=("Microsoft YaHei UI", 10))
-        style.configure("TEntry", padding=6)
-        style.configure("Treeview", font=("Consolas", 9), rowheight=22)
-        # 下载进度条：细边框 + 主题色填充，比默认灰色块醒目
-        style.configure("Bar.Horizontal.TProgressbar", troughcolor="#e2e6ee",
-                        background=ACCENT, bordercolor="#e2e6ee", lightcolor=ACCENT,
-                        darkcolor=ACCENT, thickness=12, borderwidth=0)
-        style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 9, "bold"))
+        theme.apply(root, style)
 
-        # v1.2.0：主窗口改为两个页签。下载页签里的控件与旧版完全一致，
-        # 只是父容器从 root 换成 tab_dl，保证 --selftest / 回归用例不受影响。
+        # 状态条放最外层、先 pack（side=bottom 必须先于 expand 的内容区占位），
+        # 两个页签共用一条，不随切换重建。
+        statusbar = tk.Frame(root, bg=theme.SURFACE, highlightthickness=0)
+        statusbar.pack(fill="x", side="bottom")
+        tk.Frame(statusbar, height=1, bg=theme.LINE).pack(fill="x")
+        srow = tk.Frame(statusbar, bg=theme.SURFACE)
+        srow.pack(fill="x", padx=24, pady=8)
+        self.status_dot, self._dot_item = theme.make_status_dot(srow)
+        self.status_dot.pack(side="left", padx=(0, 10))
+        self.status = tk.Label(srow, text="就绪", bg=theme.SURFACE,
+                               fg=theme.MUTED, font=theme.body(9), anchor="w")
+        self.status.pack(side="left", fill="x", expand=True)
+
+        # ---------------- 顶栏：品牌标记 + 自绘页签 ----------------
+        topbar = tk.Frame(root, bg=BG)
+        topbar.pack(fill="x")
+
+        brand = tk.Frame(topbar, bg=BG)
+        brand.pack(side="left", padx=(24, 0), pady=14)
+        self.logo = tk.Canvas(brand, width=34, height=34, bg=BG,
+                              highlightthickness=0)
+        theme.draw_logo(self.logo)
+        self.logo.pack(side="left", padx=(0, 12))
+        brand_txt = tk.Frame(brand, bg=BG)
+        brand_txt.pack(side="left")
+        tk.Label(brand_txt, text="SFD / MODEL PIPELINE", bg=BG,
+                 fg=theme.ACCENT, font=theme.mono(9, "bold")).pack(anchor="w")
+        tk.Label(brand_txt, text="Sketchfab 模型下载器", bg=BG,
+                 fg=theme.TEXT, font=theme.display(12, "bold")).pack(anchor="w")
+
+        self._tabs_frame = tk.Frame(topbar, bg=BG)
+        self._tabs_frame.pack(side="right", padx=(0, 24), pady=(10, 0))
+        self._tab_widgets = []
+        for i, label in enumerate(("下载", "模型搜索")):
+            cell = tk.Frame(self._tabs_frame, bg=BG)
+            cell.pack(side="left", padx=5)
+            lbl = tk.Label(cell, text=label, bg=BG, fg=theme.MUTED,
+                           font=theme.body(10), cursor="hand2", padx=14, pady=9)
+            lbl.pack()
+            line = tk.Frame(cell, height=3, bg=BG, highlightthickness=0)
+            line.pack(fill="x")
+            lbl.bind("<Button-1>", lambda _e, idx=i: self._select_tab(idx))
+            cell.bind("<Button-1>", lambda _e, idx=i: self._select_tab(idx))
+            self._tab_widgets.append((cell, lbl, line))
+        theme.rule(root).pack(fill="x")
+
+        # v1.2.0 起两个页签；v1.2.1 把原生 tab 栏换成自绘栏，样式更统一。
+        self.native_tabs_hidden = theme.hide_native_notebook_tabs(style)
+        if not self.native_tabs_hidden:
+            self._tabs_frame.pack_forget()      # 降级：仍用系统页签
         self.nb = ttk.Notebook(root)
         self.nb.pack(fill="both", expand=True)
         tab_dl = ttk.Frame(self.nb, style="TFrame")
         tab_search = ttk.Frame(self.nb, style="TFrame")
         self.nb.add(tab_dl, text="  下载  ")
         self.nb.add(tab_search, text="  模型搜索  ")
+        self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+        self._paint_tabs(0)
 
+        # ---------------- 下载页 ----------------
         head = ttk.Frame(tab_dl, style="TFrame")
-        head.pack(fill="x", padx=20, pady=(16, 6))
-        ttk.Label(head, text="Sketchfab 模型下载器", style="Title.TLabel").pack(anchor="w")
-        subrow = ttk.Frame(head, style="TFrame")
-        subrow.pack(fill="x", pady=(2, 0))
-        ttk.Label(subrow,
-                  text="批量下载并导出 .glb ｜ 切到「模型搜索」页签可直接搜模型",
-                  style="Sub.TLabel").pack(side="left")
-        # 副标题行右侧的版本号（M5 的第 2 处视觉位置）
-        ttk.Label(subrow, text="v" + __version__, style="Ver.TLabel").pack(side="right")
+        head.pack(fill="x", padx=26, pady=(16, 0))
+        brow = ttk.Frame(head, style="TFrame")
+        brow.pack(fill="x")
+        ttk.Label(brow, text="01 / DOWNLOAD", style="Eyebrow.TLabel").pack(side="left")
+        ttk.Label(brow, text="v" + __version__, style="Ver.TLabel").pack(side="right")
+        ttk.Label(head, text="下载模型", style="Title.TLabel").pack(anchor="w", pady=(10, 0))
+        ttk.Label(head, text="批量粘贴链接，导出带材质的 .glb ｜ 切到「模型搜索」可直接搜模型",
+                  style="Sub.TLabel").pack(anchor="w", pady=(5, 0))
+        theme.rule(tab_dl).pack(fill="x", padx=26, pady=(12, 10))
 
-        card = ttk.Frame(tab_dl, style="Card.TFrame")
-        card.pack(fill="x", padx=20, pady=(6, 8))
-        inner = ttk.Frame(card, style="Card.TFrame")
-        inner.pack(fill="x", padx=16, pady=12)
+        form = ttk.Frame(tab_dl, style="TFrame")
+        form.pack(fill="x", padx=26)
 
-        ttk.Label(inner, text="模型链接（一行一个，可粘贴多个）",
-                  style="Card.TLabel").grid(row=0, column=0, columnspan=2,
-                                            sticky="w", pady=(0, 4))
-        self.url_text = tk.Text(inner, height=4, font=("Consolas", 9),
-                                relief="solid", borderwidth=1, wrap="none",
-                                bg="white", fg=TEXT, insertbackground=TEXT,
-                                padx=8, pady=6)
-        self.url_text.grid(row=1, column=0, columnspan=2, sticky="ew")
+        ttk.Label(form, text="模型链接", style="TLabel").pack(anchor="w")
+        ttk.Label(form, text="一行一个，可粘贴多个", style="Sub.TLabel").pack(
+            anchor="w", pady=(1, 7))
+        self.url_text = tk.Text(form, height=4, font=theme.mono(10),
+                                relief="flat", borderwidth=0, wrap="none",
+                                bg=theme.SURFACE, fg=theme.TEXT,
+                                insertbackground=theme.ACCENT,
+                                highlightthickness=1,
+                                highlightbackground=theme.LINE,
+                                highlightcolor=theme.ACCENT,
+                                padx=12, pady=10)
+        self.url_text.pack(fill="x")
 
-        ttk.Label(inner, text="保存到", style="Card.TLabel").grid(
-            row=2, column=0, sticky="w", pady=(10, 4))
+        dirrow = ttk.Frame(form, style="TFrame")
+        dirrow.pack(fill="x", pady=(10, 0))
+        dleft = ttk.Frame(dirrow, style="TFrame")
+        dleft.pack(side="left", fill="x", expand=True)
+        ttk.Label(dleft, text="保存到", style="TLabel").pack(anchor="w")
+        ttk.Label(dleft, text="下载的 .glb 与贴图会放在这个目录",
+                  style="Sub.TLabel").pack(anchor="w", pady=(1, 6))
         # 上次的目录如果已经不在了（比如拔了 U 盘），自动换成可用的默认目录
         saved = self.cfg.get("out_dir") or ""
         if not saved or not Path(saved).parent.exists():
             saved = default_out_dir()
         self.out_var = tk.StringVar(value=saved)
-        ttk.Entry(inner, textvariable=self.out_var, font=("Consolas", 10)).grid(
-            row=3, column=0, sticky="ew", ipady=3)
-        ttk.Button(inner, text="浏览…", command=self.pick_dir).grid(row=3, column=1, padx=(8, 0))
+        ttk.Entry(dleft, textvariable=self.out_var, font=theme.mono(10)).pack(
+            fill="x", ipady=4)
+        ttk.Button(dirrow, text="浏览…", command=self.pick_dir).pack(
+            side="left", padx=(10, 0), anchor="s")
 
-        opts = ttk.Frame(inner, style="Card.TFrame")
-        opts.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        opts = ttk.Frame(form, style="TFrame")
+        opts.pack(fill="x", pady=(10, 0))
         self.full_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(opts, text="导出完整材质贴图的 .glb（推荐）",
                         variable=self.full_var).pack(side="left")
-        ttk.Label(opts, text="    同时下载数", style="Card.TLabel").pack(side="left")
+        ttk.Label(opts, text="同时下载数", style="Sub.TLabel").pack(
+            side="left", padx=(20, 0))
         self.conc_var = tk.IntVar(value=int(self.cfg.get("concurrency", 3)))
         ttk.Spinbox(opts, from_=1, to=5, width=4, textvariable=self.conc_var,
-                    font=("Microsoft YaHei UI", 9)).pack(side="left", padx=6)
-        ttk.Label(opts, text="（建议 2-3，太多会抢带宽）",
-                  style="Card.TLabel", foreground=MUTED).pack(side="left")
+                    font=theme.mono(10)).pack(side="left", padx=7)
+        ttk.Label(opts, text="建议 2-3，太多会抢带宽",
+                  style="Sub.TLabel").pack(side="left")
 
-        inner.columnconfigure(0, weight=1)
-
+        theme.rule(tab_dl).pack(fill="x", padx=26, pady=(12, 8))
         bar = ttk.Frame(tab_dl, style="TFrame")
-        bar.pack(fill="x", padx=20, pady=(2, 6))
-        self.btn = ttk.Button(bar, text="开始下载", style="Accent.TButton", command=self.start)
+        bar.pack(fill="x", padx=26)
+        self.btn = ttk.Button(bar, text="开始下载", style="Accent.TButton",
+                              command=self.start)
         self.btn.pack(side="left")
-        self.open_btn = ttk.Button(bar, text="打开输出目录", command=self.open_out, state="disabled")
-        self.open_btn.pack(side="left", padx=8)
-        ttk.Button(bar, text="清空日志", command=self.clear_log).pack(side="right")
-        ttk.Button(bar, text="清空链接", command=self.clear_urls).pack(side="right", padx=8)
-        self.about_btn = ttk.Button(bar, text="关于 / 诊断", command=self.show_about)
-        self.about_btn.pack(side="right", padx=8)
-        ttk.Button(bar, text="♡ 打赏", command=self.show_donate).pack(side="right")
+        self.open_btn = ttk.Button(bar, text="打开输出目录", command=self.open_out,
+                                   state="disabled")
+        self.open_btn.pack(side="left", padx=10)
+        ttk.Button(bar, text="清空日志", style="Quiet.TButton",
+                   command=self.clear_log).pack(side="right")
+        ttk.Button(bar, text="清空链接", style="Quiet.TButton",
+                   command=self.clear_urls).pack(side="right", padx=6)
+        self.about_btn = ttk.Button(bar, text="关于 / 诊断", style="Quiet.TButton",
+                                    command=self.show_about)
+        self.about_btn.pack(side="right", padx=6)
+        ttk.Button(bar, text="♡ 打赏", style="Quiet.TButton",
+                   command=self.show_donate).pack(side="right")
 
         progwrap = ttk.Frame(tab_dl, style="TFrame")
-        progwrap.pack(fill="x", padx=20, pady=(2, 8))
-
+        progwrap.pack(fill="x", padx=26, pady=(12, 0))
         prow = ttk.Frame(progwrap, style="TFrame")
         prow.pack(fill="x")
+        ttk.Label(prow, text="PROGRESS / 进度", style="Kicker.TLabel").pack(side="left")
         self.prog_label = ttk.Label(prow, text="等待开始", style="Sub.TLabel")
-        self.prog_label.pack(side="left")
-        self.prog_pct = ttk.Label(prow, text="0%", style="Ver.TLabel")
+        self.prog_label.pack(side="left", padx=(14, 0))
+        self.prog_pct = ttk.Label(prow, text="0%", style="Num.TLabel")
         self.prog_pct.pack(side="right")
-
         self.pbar = ttk.Progressbar(progwrap, mode="determinate", maximum=100,
                                     style="Bar.Horizontal.TProgressbar")
-        self.pbar.pack(fill="x", pady=(5, 0))
+        self.pbar.pack(fill="x", pady=(8, 0))
 
-        logwrap = ttk.Frame(tab_dl, style="Card.TFrame")
-        logwrap.pack(fill="both", expand=True, padx=20, pady=(0, 6))
-        self.log = tk.Text(logwrap, wrap="word", bg="#0f172a", fg="#d7e0ef",
-                           insertbackground="#d7e0ef", relief="flat",
-                           font=("Consolas", 9), padx=12, pady=10, state="disabled")
+        ttk.Label(tab_dl, text="CONSOLE / 运行日志",
+                  style="Kicker.TLabel").pack(anchor="w", padx=26, pady=(12, 6))
+        logwrap = tk.Frame(tab_dl, bg=theme.LOG_BG, highlightthickness=1,
+                           highlightbackground=theme.LINE, height=150)
+        logwrap.pack(fill="both", expand=True, padx=26, pady=(0, 10))
+        # 窗口被拖小时日志区至少留 150px，不能被上面的表单挤成 0 高度
+        logwrap.pack_propagate(False)
+        self.log = tk.Text(logwrap, wrap="word", bg=theme.LOG_BG, fg=theme.LOG_FG,
+                           insertbackground=theme.ACCENT, relief="flat",
+                           borderwidth=0, font=theme.mono(9),
+                           padx=14, pady=12, state="disabled")
         sb = ttk.Scrollbar(logwrap, command=self.log.yview)
         self.log.configure(yscrollcommand=sb.set)
         self.log.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
-
-        self.status = ttk.Label(tab_dl, text="就绪", style="Sub.TLabel")
-        self.status.pack(fill="x", padx=22, pady=(0, 10))
 
         # ---------------- 模型搜索页签（v1.2.0） ----------------
         self._init_search_state()
@@ -531,6 +572,40 @@ class App:
         self.url_text.focus_set()
         self.precheck()
 
+    # ---------------- 自绘页签 / 状态条 ----------------
+    def _paint_tabs(self, index):
+        for i, (_cell, lbl, line) in enumerate(self._tab_widgets):
+            active = (i == index)
+            lbl.configure(fg=theme.TEXT if active else theme.MUTED,
+                          font=theme.display(11, "bold") if active else theme.body(10))
+            line.configure(bg=theme.ACCENT if active else theme.BG)
+
+    def _select_tab(self, index):
+        try:
+            self.nb.select(index)
+        except Exception:
+            return
+        self._paint_tabs(index)
+
+    def _on_tab_changed(self, _event):
+        """用户若通过键盘/原生页签切换，自绘指示条也要跟上。"""
+        try:
+            index = self.nb.index(self.nb.select())
+        except Exception:
+            return
+        self._paint_tabs(index)
+
+    def set_status(self, text, tone="info"):
+        """状态条文字 + 左侧指示点颜色（就绪/进行中/警告/完成）。"""
+        colors = {"info": theme.OK, "ok": theme.OK, "busy": theme.ACCENT,
+                  "warn": theme.WARN, "err": theme.ERR}
+        try:
+            self.status.configure(text=text)
+            self.status_dot.itemconfigure(self._dot_item,
+                                          fill=colors.get(tone, theme.OK))
+        except Exception:
+            pass
+
     # ---------------- 模型搜索（v1.2.0） ----------------
     def _init_search_state(self):
         self.search_gen = 0              # 请求代号，丢弃过期结果
@@ -542,41 +617,45 @@ class App:
 
     def _build_search_tab(self, parent):
         """搜索页签：关键词 / 过滤 / 排序 / 结果列表 / 翻页 / 一键下载。"""
-        top = ttk.Frame(parent, style="TFrame")
-        top.pack(fill="x", padx=20, pady=(16, 8))
-        ttk.Label(top, text="搜索 Sketchfab 模型", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(top, text="官方公开接口，免登录；结果可直接加入下载队列",
-                  style="Sub.TLabel").pack(anchor="w", pady=(2, 0))
+        head = ttk.Frame(parent, style="TFrame")
+        head.pack(fill="x", padx=26, pady=(16, 0))
+        ttk.Label(head, text="02 / DISCOVER", style="Eyebrow.TLabel").pack(anchor="w")
+        ttk.Label(head, text="搜索模型", style="Title.TLabel").pack(anchor="w", pady=(10, 0))
+        ttk.Label(head, text="官方公开接口，免登录；结果可直接加入下载队列",
+                  style="Sub.TLabel").pack(anchor="w", pady=(5, 0))
+        theme.rule(parent).pack(fill="x", padx=26, pady=(12, 10))
 
-        row = ttk.Frame(parent, style="Card.TFrame")
-        row.pack(fill="x", padx=20, pady=(0, 8))
-        inner = ttk.Frame(row, style="Card.TFrame")
-        inner.pack(fill="x", padx=16, pady=12)
+        ttk.Label(parent, text="KEYWORD / 关键词",
+                  style="Kicker.TLabel").pack(anchor="w", padx=26)
+        sr = ttk.Frame(parent, style="TFrame")
+        sr.pack(fill="x", padx=26, pady=(7, 0))
 
         self.search_var = tk.StringVar()
-        ent = ttk.Entry(inner, textvariable=self.search_var,
-                        font=("Microsoft YaHei UI", 11))
-        ent.pack(side="left", fill="x", expand=True, ipady=4)
+        ent = ttk.Entry(sr, textvariable=self.search_var, font=theme.body(11))
+        ent.pack(side="left", fill="x", expand=True, ipady=5)
         ent.bind("<Return>", lambda _e: self._search_go(None, reset=True))
-        self.search_btn = ttk.Button(inner, text="搜索", style="Accent.TButton",
+        self.search_btn = ttk.Button(sr, text="搜索", style="Accent.TButton",
                                      command=lambda: self._search_go(None, reset=True))
-        self.search_btn.pack(side="left", padx=(10, 12))
+        self.search_btn.pack(side="left", padx=(10, 14))
 
         self.search_dl_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(inner, text="只看可下载", variable=self.search_dl_var).pack(side="left")
-        ttk.Label(inner, text="  排序", style="Card.TLabel").pack(side="left")
+        ttk.Checkbutton(sr, text="只看可下载", variable=self.search_dl_var).pack(side="left")
+        ttk.Label(sr, text="排序", style="Sub.TLabel").pack(side="left", padx=(18, 0))
         self.search_sort_var = tk.StringVar(value="相关度")
-        sort_box = ttk.Combobox(inner, textvariable=self.search_sort_var, width=10,
+        sort_box = ttk.Combobox(sr, textvariable=self.search_sort_var, width=10,
                                 state="readonly", values=list(sfsearch.SORT_OPTIONS),
-                                font=("Microsoft YaHei UI", 9))
-        sort_box.pack(side="left", padx=(4, 0))
+                                font=theme.body(9))
+        sort_box.pack(side="left", padx=(6, 0))
 
-        treewrap = ttk.Frame(parent, style="TFrame")
-        treewrap.pack(fill="both", expand=True, padx=20, pady=(0, 6))
+        ttk.Label(parent, text="RESULTS / 结果",
+                  style="Kicker.TLabel").pack(anchor="w", padx=26, pady=(12, 6))
+        treewrap = tk.Frame(parent, bg=theme.SURFACE, highlightthickness=1,
+                            highlightbackground=theme.LINE)
+        treewrap.pack(fill="both", expand=True, padx=26, pady=(0, 6))
         cols = ("name", "author", "faces", "download", "license", "anim")
         self.search_tree = ttk.Treeview(treewrap, columns=cols, show="headings",
                                         selectmode="extended")
-        headers = (("name", "模型名称", 300), ("author", "作者", 130),
+        headers = (("name", "模型名称", 320), ("author", "作者", 130),
                    ("faces", "面数", 90), ("download", "下载", 70),
                    ("license", "许可", 170), ("anim", "动画", 60))
         for key, label, width in headers:
@@ -585,27 +664,35 @@ class App:
                                     stretch=(key == "name"))
         sb = ttk.Scrollbar(treewrap, command=self.search_tree.yview)
         self.search_tree.configure(yscrollcommand=sb.set)
-        self.search_tree.pack(side="left", fill="both", expand=True)
+        self.search_tree.pack(side="left", fill="both", expand=True, padx=1, pady=1)
         sb.pack(side="right", fill="y")
-        self.search_tree.tag_configure("nodl", foreground="#9aa1ad")
+        self.search_tree.tag_configure("nodl", foreground=theme.DIM)
         self.search_tree.bind("<Double-1>", lambda _e: self._open_selected_page())
+        # 空状态：大片空白表格里给一句引导，而不是让用户对着空表发愣
+        self.search_empty = tk.Label(
+            treewrap, text="还没有搜索结果\n输入关键词，回车或点「搜索」",
+            bg=theme.SURFACE, fg=theme.DIM, font=theme.body(11),
+            justify="center")
+        self.search_empty.place(relx=0.5, rely=0.42, anchor="center")
+        self.search_empty.lift()
 
         foot = ttk.Frame(parent, style="TFrame")
-        foot.pack(fill="x", padx=20, pady=(2, 4))
+        foot.pack(fill="x", padx=26, pady=(6, 2))
         self.prev_btn = ttk.Button(foot, text="← 上一页", command=self._search_prev,
                                    state="disabled")
         self.prev_btn.pack(side="left")
         self.next_btn = ttk.Button(foot, text="下一页 →", command=self._search_next,
                                    state="disabled")
         self.next_btn.pack(side="left", padx=8)
-        ttk.Button(foot, text="打开原页", command=self._open_selected_page).pack(side="right")
+        ttk.Button(foot, text="打开原页", style="Quiet.TButton",
+                   command=self._open_selected_page).pack(side="right")
         self.download_sel_btn = ttk.Button(foot, text="下载选中", style="Accent.TButton",
                                            command=self._download_selected)
         self.download_sel_btn.pack(side="right", padx=8)
 
         self.search_status = ttk.Label(parent, text="输入关键词后回车或点「搜索」",
                                        style="Sub.TLabel")
-        self.search_status.pack(fill="x", padx=22, pady=(0, 12))
+        self.search_status.pack(fill="x", padx=26, pady=(2, 12))
 
     def _search_go(self, cursor, reset=False):
         if self.search_busy:
@@ -621,6 +708,7 @@ class App:
         self.search_busy = True
         self.search_btn.configure(state="disabled", text="搜索中…")
         self.search_status.configure(text="正在搜索「%s」…" % query)
+        self.search_empty.place_forget()
         threading.Thread(target=self._search_worker,
                          args=(gen, query, downloadable, sort, cursor, reset),
                          daemon=True).start()
@@ -658,6 +746,10 @@ class App:
                         ("%d 段" % it["animations"]) if it["animations"] else "—"),
                 tags=() if it["downloadable"] else ("nodl",))
 
+        if items:
+            self.search_empty.place_forget()
+        else:
+            self.search_empty.place(relx=0.5, rely=0.42, anchor="center")
         self.prev_btn.configure(state="normal" if len(self.search_cursor_stack) > 1 else "disabled")
         self.next_btn.configure(state="normal" if self.search_next_cursor else "disabled")
         page_no = len(self.search_cursor_stack)
@@ -676,6 +768,7 @@ class App:
         self.search_busy = False
         self.search_btn.configure(state="normal", text="搜索")
         self.search_status.configure(text="搜索失败：%s" % message)
+        self.search_empty.place(relx=0.5, rely=0.42, anchor="center")
         self.logline("⚠ 模型搜索失败：%s" % message, ERR)
 
     def _selected_items(self):
@@ -717,7 +810,7 @@ class App:
         self.nb.select(0)
         self.logline("· 搜索结果已加入下载列表：%d 个模型" % len(urls), OK)
         if self.busy:
-            self.status.configure(text="已加入下载列表；当前批次结束后点「开始下载」")
+            self.set_status("已加入下载列表；当前批次结束后点「开始下载」", "busy")
         else:
             self.start()
 
@@ -799,11 +892,11 @@ class App:
             for it in bad:
                 self.logline("   - %s：%s" % (it.label, it.hint or it.path), WARN)
             self.logline("   点工具栏「关于 / 诊断」查看明细与解决办法。", WARN)
-            self.status.configure(text="⚠ 发现 %d 项问题，点「关于 / 诊断」查看" % len(bad))
+            self.set_status("⚠ 发现 %d 项问题，点「关于 / 诊断」查看" % len(bad), "warn")
         else:
             backend = diag.decrypt_backend(RES, CLI_DIR)
             self.logline("✓ 环境自检通过，可以开始下载（解密后端 %s）" % backend, OK)
-            self.status.configure(text="就绪 · v%s · 解密后端 %s" % (__version__, backend))
+            self.set_status("就绪 · v%s · 解密后端 %s" % (__version__, backend), "ok")
 
     # ---------------- 关于 / 诊断（R2/R3/R11，T03 接口） ----------------
     # ---------------- 打赏 ----------------
@@ -856,8 +949,7 @@ class App:
             card = ttk.Frame(row, style="Card.TFrame", padding=12)
             card.pack(side="left", padx=(0, 14), fill="both", expand=True)
             ttk.Label(card, text=title, style="Card.TLabel",
-                      font=("Microsoft YaHei UI", 11, "bold"),
-                      foreground=color).pack()
+                      font=theme.display(11), foreground=color).pack()
             tk.Label(card, image=photo, background=CARD).pack(pady=(8, 4))
             ttk.Label(card, text="扫码即可，感谢支持 ♥", style="Card.TLabel",
                       foreground=MUTED).pack(pady=(2, 4))
@@ -947,9 +1039,10 @@ class App:
                   style="Sub.TLabel").pack(anchor="w", padx=20)
         clogwrap = ttk.Frame(win, style="Card.TFrame")
         clogwrap.pack(fill="x", padx=18, pady=(2, 8))
-        clog = tk.Text(clogwrap, height=7, wrap="word", bg="#0f172a", fg="#d7e0ef",
-                       relief="flat", font=("Microsoft YaHei UI", 9),
-                       padx=10, pady=8, state="normal")
+        clog = tk.Text(clogwrap, height=7, wrap="word", bg=theme.LOG_BG,
+                       fg=theme.LOG_FG, relief="flat", font=theme.body(9),
+                       insertbackground=theme.ACCENT,
+                       padx=12, pady=10, state="normal")
         csb = ttk.Scrollbar(clogwrap, command=clog.yview)
         clog.configure(yscrollcommand=csb.set)
         clog.pack(side="left", fill="both", expand=True)
@@ -999,7 +1092,7 @@ class App:
         self.about_state["repo_var"] = tk.StringVar(
             value=str(self.cfg.get("update_repo") or ""))
         ttk.Entry(uinner, textvariable=self.about_state["repo_var"],
-                  font=("Consolas", 9)).grid(row=1, column=0, sticky="ew", pady=(2, 6))
+                  font=theme.mono(9)).grid(row=1, column=0, sticky="ew", pady=(2, 6))
 
         self.about_state["adv_var"] = tk.BooleanVar(value=False)
         ttk.Checkbutton(uinner, text="私有仓库才需要：填写访问令牌（PAT）",
@@ -1012,7 +1105,7 @@ class App:
             value=str(self.cfg.get("github_token") or ""))
         ttk.Entry(self.about_state["token_row"],
                   textvariable=self.about_state["token_var"],
-                  font=("Consolas", 9), show="•").pack(side="left", fill="x", expand=True)
+                  font=theme.mono(9), show="•").pack(side="left", fill="x", expand=True)
         ttk.Label(self.about_state["token_row"],
                   text=" 只勾 Contents: Read-only", style="Card.TLabel",
                   foreground=MUTED).pack(side="left")
@@ -1023,7 +1116,7 @@ class App:
         ttk.Label(uinner, text="或：静态 version.json 直链（网盘/任意 HTTP）",
                   style="Card.TLabel").grid(row=4, column=0, sticky="w", pady=(6, 0))
         ttk.Entry(uinner, textvariable=self.about_state["json_var"],
-                  font=("Consolas", 9)).grid(row=5, column=0, sticky="ew", pady=(2, 0))
+                  font=theme.mono(9)).grid(row=5, column=0, sticky="ew", pady=(2, 0))
         uinner.columnconfigure(0, weight=1)
 
         self.about_state["upd_var"] = tk.StringVar(
@@ -1218,9 +1311,9 @@ class App:
         self.prog_label.configure(text="准备中…")
         self.btn.configure(state="disabled", text="下载中…")
         self.open_btn.configure(state="disabled")
-        self.status.configure(text=f"0 / {self.total} 完成（并发 {conc}）")
+        self.set_status(f"0 / {self.total} 完成（并发 {conc}）", "busy")
         self.logline("")
-        self.logline("─" * 66, "#4b5563")
+        self.logline("─" * 66, theme.LINE)
         self.logline(f"开始批量下载：{self.total} 个模型，并发 {conc}", None)
 
         threading.Thread(target=self.run_batch, args=(uniq, out, conc, full),
@@ -1309,8 +1402,9 @@ class App:
                         self.logline(f"❌ [{idx}] {name} → {detail}", ERR)
                     pct = self.finished / max(1, self.total) * 100
                     self.pbar.configure(value=pct)
-                    self.status.configure(
-                        text=f"{self.finished} / {self.total} 完成（成功 {self.ok_count}，失败 {self.fail_count}）")
+                    self.set_status(
+                        f"{self.finished} / {self.total} 完成（成功 {self.ok_count}，失败 {self.fail_count}）",
+                        "busy")
                 elif kind == "update_done":
                     self._render_update_result(payload)
                 elif kind == "search_done":
@@ -1327,8 +1421,9 @@ class App:
         self.busy = False
         self.btn.configure(state="normal", text="开始下载")
         self.open_btn.configure(state="normal" if self.ok_count else "disabled")
-        self.status.configure(
-            text=f"全部完成：成功 {self.ok_count}，失败 {self.fail_count}")
+        self.set_status(
+            f"全部完成：成功 {self.ok_count}，失败 {self.fail_count}",
+            "ok" if not self.fail_count else "err")
         self._frac = {}
         if self.fail_count:
             self.prog_label.configure(text="已完成，%d 个失败" % self.fail_count)
@@ -1337,7 +1432,7 @@ class App:
             self.pbar.configure(value=100)
             self.prog_pct.configure(text="100%")
         self.logline("")
-        self.logline("─" * 66, "#4b5563")
+        self.logline("─" * 66, theme.LINE)
         self.logline(f"批量结束：成功 {self.ok_count} 个，失败 {self.fail_count} 个", OK if not self.fail_count else WARN)
 
 
