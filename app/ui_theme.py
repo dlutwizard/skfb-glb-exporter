@@ -27,13 +27,13 @@ from __future__ import annotations
 # import 本模块做令牌/对比度自检（发布物里的 Python 不需要 tkinter 才能检查）。
 
 # ---------------- 设计令牌 ----------------
-BG = "#12151a"          # 主背景：暖调石墨，不用纯黑
-SURFACE = "#1a1e25"     # 输入 / 面板
-SURFACE2 = "#222831"    # 更高一层：表头、进度槽、hover
-LINE = "#2c333d"        # 1px 规则线
+BG = "#1e222a"          # 主背景：暖调石墨，不用纯黑（v1.2.3 整体提亮一档）
+SURFACE = "#262b35"     # 输入 / 面板
+SURFACE2 = "#2e3541"    # 更高一层：表头、进度槽、hover
+LINE = "#38404d"        # 1px 规则线
 TEXT = "#ece9e2"        # 暖白主文字
-MUTED = "#8d96a3"       # 次文字（对 BG 约 5.6:1）
-DIM = "#5f6875"         # 更弱：禁用、仅浏览
+MUTED = "#8d96a3"       # 次文字（对 BG 约 5.3:1）
+DIM = "#6b7582"         # 更弱：禁用、仅浏览（随底色同步上移）
 ACCENT = "#e8a23b"      # 唯一强调色：琥珀
 ACCENT_HI = "#f2b45c"   # hover
 ACCENT_DK = "#c9862a"   # pressed
@@ -41,7 +41,7 @@ ON_ACCENT = "#15181d"   # 强调色块上的文字
 OK = "#86bd93"
 WARN = "#e3b45c"
 ERR = "#e28076"
-LOG_BG = "#0e1115"      # 控制台再压暗一档
+LOG_BG = "#1a1e25"      # 控制台再压暗一档
 LOG_FG = "#c8d0dc"
 
 CARD = SURFACE          # 兼容 GUI 里沿用已久的名字

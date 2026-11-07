@@ -79,6 +79,18 @@ def test_no_hardcoded_legacy_palette_in_gui():
         assert old not in src, "残留旧配色 %s" % old
 
 
+def test_background_lifted_and_hierarchy_kept():
+    """v1.2.3：底色整体提亮一档，仍是深色，且面板/文字层级没被抹平。"""
+    assert _luminance(theme.BG) >= 0.012, "底色又被调回近黑了"
+    assert _luminance(theme.BG) < 0.03, "别把深色工作台改成浅灰底"
+    assert _luminance(theme.SURFACE) > _luminance(theme.BG)
+    assert _luminance(theme.SURFACE2) > _luminance(theme.SURFACE)
+    assert _luminance(theme.LOG_BG) < _luminance(theme.BG)  # 控制台仍压暗一档
+    assert _contrast(theme.TEXT, theme.BG) >= 4.5
+    assert _contrast(theme.MUTED, theme.BG) >= 4.5
+    assert _contrast(theme.LOG_FG, theme.LOG_BG) >= 4.5
+
+
 def test_donate_entry_is_prominent_in_topbar():
     """v1.2.2：打赏入口必须在顶栏最右侧且醒目，底部工具栏不再藏弱按钮。"""
     src = (ROOT / "app" / "sketchfab_gui.py").read_text(encoding="utf-8")
