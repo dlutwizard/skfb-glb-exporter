@@ -53,6 +53,7 @@ if str(_APP_DIR) not in sys.path:
 
 import diagnostics as diag                                     # noqa: E402
 import image_codec                                             # noqa: E402
+import print_export                                            # noqa: E402
 import sketchfab_search as sfsearch                            # noqa: E402
 import ui_theme as theme                                       # noqa: E402
 import update_checker                                          # noqa: E402
@@ -405,6 +406,7 @@ class App:
         self.root = root
         self.q = queue.Queue()
         self.busy = False
+        self._converting = False          # GLB→STL/3MF 后台转换防重入
         self.last_dir = None
         self.total = 0
         self.finished = 0
@@ -565,6 +567,11 @@ class App:
         self.open_btn = ttk.Button(bar, text="打开输出目录", command=self.open_out,
                                    state="disabled")
         self.open_btn.pack(side="left", padx=10)
+        # v1.2.5：手动把任意 .glb 转成打印文件；不接下载流程、不自动导出。
+        self.print_btn = ttk.Button(
+            bar, text="GLB → STL / 3MF…", style="Quiet.TButton",
+            command=self.convert_clicked)
+        self.print_btn.pack(side="left")
         ttk.Button(bar, text="清空日志", style="Quiet.TButton",
                    command=self.clear_log).pack(side="right")
         ttk.Button(bar, text="清空链接", style="Quiet.TButton",
@@ -1048,6 +1055,59 @@ class App:
             webbrowser.open(Path(p).as_uri())
         else:
             messagebox.showinfo("提示", "目录还不存在")
+
+    # ---------------- GLB → STL / 3MF（v1.2.5） ----------------
+    def convert_clicked(self):
+        """选一个硬盘上任意 .glb，后台转成同目录的 .stl 与 .3mf。"""
+        if self._converting:
+            return
+        initial = self.out_var.get() or default_out_dir()
+        path = filedialog.askopenfilename(
+            title="选择要转换的 GLB 模型",
+            filetypes=[("glTF 二进制模型", "*.glb"), ("所有文件", "*.*")],
+            initialdir=initial if Path(initial).exists() else None)
+        if not path:
+            return
+        self._converting = True
+        self.print_btn.configure(state="disabled", text="转换中…")
+        self.logline("")
+        self.logline("─" * 66, theme.LINE)
+        self.logline("GLB → 打印文件：%s" % path)
+        self.set_status("正在把 GLB 转成 STL / 3MF…", "busy")
+        threading.Thread(target=self._convert_worker, args=(Path(path),),
+                         daemon=True, name="sfd-print-export").start()
+
+    def _convert_worker(self, glb_path):
+        def log(text, color=None):
+            self.q.put(("print_log", (text, color)))
+
+        try:
+            res = print_export.convert(glb_path, log=lambda m: log("  " + m))
+        except print_export.PrintExportError as e:
+            log("✗ 转换失败：%s" % e, ERR)
+            self.q.put(("print_done", (False, "转换失败：%s" % e)))
+            return
+        except Exception as e:                       # 不让后台线程静默死掉
+            log("✗ 未预期的错误：%s: %s" % (type(e).__name__, e), ERR)
+            self.q.put(("print_done", (False, "转换失败：%s" % e)))
+            return
+
+        log("✓ 解析完成：%d 个 primitive，%d 个顶点，%d 个三角形"
+            % (res["primitives"], res["vertices"], res["triangles"]), OK)
+        if res["skipped"]:
+            log("  ⚠ 跳过 %d 个退化或坐标非法的三角形" % res["skipped"], WARN)
+        log("  坐标轴：%s" % ("glTF Y-up → 打印 Z-up（已修正，模型不会躺着）"
+                            if res["axis_fixed"] else "保持 glTF 原坐标系"))
+        log("  尺寸换算：%s" % res["unit_note"])
+        log("  成品尺寸（mm）：%.2f × %.2f × %.2f" % tuple(res["bbox_mm"]))
+        log("  颜色：%d 种（写入 3MF 的 basematerials；STL 为单色）"
+            % len(res["colors"]))
+        for out in res["outputs"]:
+            p = Path(out)
+            log("  → %s（%.1f KB）" % (p.name, p.stat().st_size / 1024.0), OK)
+        log("  说明：贴图颜色不能无损转进 3MF，含贴图的材质按常量色输出；"
+            "多色请导入 .3mf，.stl 只保留几何。")
+        self.q.put(("print_done", (True, "转换完成：同目录已生成 .stl 与 .3mf")))
 
     def save_patch(self, patch):
         """合并式保存并同步内存副本。"""
@@ -1607,6 +1667,16 @@ class App:
                     gen, index, url, png, cached = payload
                     if gen == self.search_gen:   # 连续搜索 / 翻页后的旧图直接丢弃
                         self._apply_thumb(index, url, png, cached)
+                elif kind == "print_log":
+                    text, color = payload
+                    self.logline(text, color)
+                elif kind == "print_done":
+                    ok, msg = payload
+                    self._converting = False
+                    self.print_btn.configure(state="normal",
+                                             text="GLB → STL / 3MF…")
+                    self.logline(msg, OK if ok else ERR)
+                    self.set_status(msg, "ok" if ok else "err")
                 elif kind == "batch_done":
                     self.finish()
         except queue.Empty:

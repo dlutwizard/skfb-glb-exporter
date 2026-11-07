@@ -6,6 +6,49 @@
 打包时本文件会被复制到 `_internal/CHANGELOG.md`，「关于」面板离线读取它，
 因此日志正文必须是纯文本 Markdown，不要写图片或外链依赖。
 
+## [1.2.5] - 2026-11-07
+
+新增 GLB → 3D 打印文件转换：一键导出二进制 STL 与带颜色的 3MF，纯标准库实现、零新增打包依赖。
+
+### 功能
+
+- 下载页工具栏新增「GLB → STL / 3MF…」按钮：手动选硬盘上任意 `.glb`，
+  在**同目录**生成同名 `.stl` 与 `.3mf`。下载流程完全不变，不会在下载后自动导出。
+- `app/print_export.py` 用 `struct` / `json` / `zipfile` 直接解析 glTF 2.0 binary：
+  JSON chunk + BIN chunk、bufferView.byteStride 交错顶点、6 种 componentType、
+  normalized 整数、sparse accessor、内嵌 / data URI / 外置 `.bin` 三种 buffer。
+- 遍历 scene → nodes 累积 4x4 变换（matrix 或 TRS 四元数），支持
+  TRIANGLES / TRIANGLE_STRIP / TRIANGLE_FAN；含镜像缩放的节点自动翻转绕序，
+  避免法线朝里；退化三角形与坐标非法的顶点会被跳过并计数。
+
+### 打印相关修正
+
+- glTF 是 Y-up，切片软件按 Z-up 解释 STL / 3MF。默认做一次纯旋转
+  `(x, y, z) → (x, -z, y)`（本项目 `extlib/osg-scene.js` 里 ZUP_TO_YUP_MAT3 的逆），
+  否则导出的模型会躺着。
+- 单位：glTF 规范是米、3MF 是毫米。按包围盒最长边自动判断（< 10 视为米制 ×1000，
+  否则 1:1），日志逐条写明换算依据与成品毫米尺寸，模块 API 也允许显式指定 scale。
+- 3MF 按 OPC 包写 `[Content_Types].xml` / `_rels/.rels` / `3D/3dmodel.model`，
+  用 Core Spec 的 `<basematerials>` + 三角形 `p1` 表达多色；颜色取自
+  `pbrMetallicRoughness.baseColorFactor`（线性 → sRGB）。basematerials 不支持顶点渐变，
+  因此三角形只写 `p1`，不写 `p2/p3`。
+
+### 限制（日志与使用说明里如实标注）
+
+- STL 是无单位的单色三角网格；**多色请用 `.3mf`** 导入切片软件。
+- 贴图颜色无法无损转进 3MF，含 `baseColorTexture` 的材质退化为白色；
+  需要原贴图请直接用 `.glb`。
+- 蒙皮 / 形变目标 / 动画只取静态顶点，不重算骨骼变换。
+- 点、线 primitive 不是实体，跳过。
+
+### 工程
+
+- 两个 PyInstaller spec 的 `hiddenimports` 加入 `print_export`；不新增任何第三方依赖，
+  发布包体积基本不变。
+- 新增 `tests/test_print_export.py`（27 条离线用例，自己拼最小 GLB，覆盖容器守卫、
+  accessor、节点层级 / 四元数 / 镜像、坐标轴、STL 二进制布局、3MF OPC 结构、
+  多色、单位换算、GUI 接线与 spec 守卫）。
+
 ## [1.2.4] - 2026-11-07
 
 模型搜索结果加上图片预览：每行显示缩略图，选中一条可在右侧查看大图与完整信息，零新增打包依赖。

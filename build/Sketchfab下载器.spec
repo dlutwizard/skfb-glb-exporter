@@ -36,7 +36,7 @@ a = Analysis(
     hiddenimports=[
         "requests", "urllib3", "certifi", "idna", "charset_normalizer",
         "version", "diagnostics", "update_checker", "sketchfab_search", "ui_theme",
-        "image_codec",
+        "image_codec", "print_export",
     ],
     hookspath=[],
     hooksconfig={},
