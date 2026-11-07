@@ -79,6 +79,19 @@ def test_no_hardcoded_legacy_palette_in_gui():
         assert old not in src, "残留旧配色 %s" % old
 
 
+def test_donate_entry_is_prominent_in_topbar():
+    """v1.2.2：打赏入口必须在顶栏最右侧且醒目，底部工具栏不再藏弱按钮。"""
+    src = (ROOT / "app" / "sketchfab_gui.py").read_text(encoding="utf-8")
+    assert "self.donate_top_btn" in src
+    assert 'style="Donate.TButton"' in src
+    assert "♥ 打赏支持" in src
+    assert "♡ 打赏" not in src, "底部工具栏里的旧打赏按钮没有移除"
+    # side=right 先 pack 者更靠右：打赏按钮必须先于页签栏 pack
+    assert src.index("self.donate_top_btn.pack(") < src.index("self._tabs_frame.pack(")
+    theme_src = (ROOT / "app" / "ui_theme.py").read_text(encoding="utf-8")
+    assert '"Donate.TButton"' in theme_src
+
+
 def test_apply_styles_and_hide_tabs_on_real_tk():
     pytest.importorskip("tkinter")
     import tkinter as tk
@@ -92,6 +105,8 @@ def test_apply_styles_and_hide_tabs_on_real_tk():
         assert set(fonts) == {"display", "body", "mono"}
         assert all(isinstance(v, str) and v for v in fonts.values())
         assert style.lookup("Accent.TButton", "background") == theme.ACCENT
+        assert style.lookup("Donate.TButton", "background") == theme.ACCENT
+        assert style.lookup("Donate.TButton", "foreground") == theme.ON_ACCENT
         assert style.lookup("TFrame", "background") == theme.BG
         assert style.lookup("Treeview", "background") == theme.SURFACE
         assert theme.hide_native_notebook_tabs(style) is True

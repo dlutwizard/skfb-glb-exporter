@@ -183,6 +183,18 @@ def apply(root, style) -> dict:
          foreground=[("disabled", DIM)],
          bordercolor=[("active", ACCENT_HI), ("disabled", SURFACE2)])
 
+    # 顶栏打赏入口：实心琥珀、比主按钮小一号。位置在界面最上方，
+    # 用同一个强调色保持克制，但足够跳，不会被当成普通工具栏文字按钮。
+    _configure(style, "Donate.TButton", font=display(10, "bold"),
+               padding=(16, 8), background=ACCENT, foreground=ON_ACCENT,
+               borderwidth=0, relief="flat", bordercolor=ACCENT,
+               lightcolor=ACCENT, darkcolor=ACCENT)
+    _map(style, "Donate.TButton",
+         background=[("active", ACCENT_HI), ("pressed", ACCENT_DK),
+                     ("disabled", SURFACE2)],
+         foreground=[("disabled", DIM)],
+         bordercolor=[("active", ACCENT_HI)])
+
     _configure(style, "Quiet.TButton", font=body(9), padding=(10, 6),
                background=BG, foreground=MUTED, borderwidth=0,
                relief="flat", bordercolor=BG)

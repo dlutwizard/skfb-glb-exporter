@@ -426,8 +426,14 @@ class App:
         tk.Label(brand_txt, text="Sketchfab 模型下载器", bg=BG,
                  fg=theme.TEXT, font=theme.display(12, "bold")).pack(anchor="w")
 
+        # 打赏入口放在整个界面最上方的最右侧：实心琥珀按钮（v1.2.2），
+        # 先 pack 的 side=right 更靠右，所以它在页签栏外侧。
+        self.donate_top_btn = ttk.Button(
+            topbar, text="♥ 打赏支持", style="Donate.TButton",
+            command=self.show_donate)
+        self.donate_top_btn.pack(side="right", padx=(0, 24), pady=(10, 0))
         self._tabs_frame = tk.Frame(topbar, bg=BG)
-        self._tabs_frame.pack(side="right", padx=(0, 24), pady=(10, 0))
+        self._tabs_frame.pack(side="right", padx=(0, 16), pady=(10, 0))
         self._tab_widgets = []
         for i, label in enumerate(("下载", "模型搜索")):
             cell = tk.Frame(self._tabs_frame, bg=BG)
@@ -529,8 +535,7 @@ class App:
         self.about_btn = ttk.Button(bar, text="关于 / 诊断", style="Quiet.TButton",
                                     command=self.show_about)
         self.about_btn.pack(side="right", padx=6)
-        ttk.Button(bar, text="♡ 打赏", style="Quiet.TButton",
-                   command=self.show_donate).pack(side="right")
+        # 打赏入口已移到顶栏最右侧（v1.2.2），这里不再放弱样式文字按钮
 
         progwrap = ttk.Frame(tab_dl, style="TFrame")
         progwrap.pack(fill="x", padx=26, pady=(12, 0))
