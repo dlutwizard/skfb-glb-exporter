@@ -130,9 +130,10 @@ def test_is_newer(cur, latest, expect):
 
 
 def test_github_flow_end_to_end_mocked():
+    # 用一个远高于任何当前版本的值，避免每次升版本号都要改这条用例
     payload = json.dumps({
-        "tag_name": "v1.2.0",
-        "html_url": "https://github.com/o/n/releases/tag/v1.2.0",
+        "tag_name": "v9.9.9",
+        "html_url": "https://github.com/o/n/releases/tag/v9.9.9",
         "assets": [{"browser_download_url": "https://x/pkg.zip"}],
         "body": "- fix a\n- add b",
         "published_at": "2026-11-01T00:00:00Z",
@@ -141,7 +142,7 @@ def test_github_flow_end_to_end_mocked():
                            return_value=_resp(payload)) as m_open:
         result = uc.check({"update_repo": "o/n"})
     assert result.ok()
-    assert result.latest == "1.2.0"
+    assert result.latest == "9.9.9"
     assert result.is_newer is True
     assert result.url == "https://x/pkg.zip"
     assert result.source == "github"

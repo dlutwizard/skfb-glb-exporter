@@ -50,6 +50,7 @@ if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
 import diagnostics as diag                                     # noqa: E402
+import sketchfab_search as sfsearch                            # noqa: E402
 import update_checker                                          # noqa: E402
 from version import (APP_ID, APP_NAME, CHANGELOG_HEAD, SINGLE_FILE_EXPERIMENTAL,  # noqa: E402
                      VERSION_TUPLE, __version__)
@@ -421,18 +422,27 @@ class App:
                         darkcolor=ACCENT, thickness=12, borderwidth=0)
         style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 9, "bold"))
 
-        head = ttk.Frame(root, style="TFrame")
+        # v1.2.0：主窗口改为两个页签。下载页签里的控件与旧版完全一致，
+        # 只是父容器从 root 换成 tab_dl，保证 --selftest / 回归用例不受影响。
+        self.nb = ttk.Notebook(root)
+        self.nb.pack(fill="both", expand=True)
+        tab_dl = ttk.Frame(self.nb, style="TFrame")
+        tab_search = ttk.Frame(self.nb, style="TFrame")
+        self.nb.add(tab_dl, text="  下载  ")
+        self.nb.add(tab_search, text="  模型搜索  ")
+
+        head = ttk.Frame(tab_dl, style="TFrame")
         head.pack(fill="x", padx=20, pady=(16, 6))
         ttk.Label(head, text="Sketchfab 模型下载器", style="Title.TLabel").pack(anchor="w")
         subrow = ttk.Frame(head, style="TFrame")
         subrow.pack(fill="x", pady=(2, 0))
         ttk.Label(subrow,
-                  text="支持一次粘贴多个链接，并行下载；每个模型自动解密贴图并导出 .glb",
+                  text="批量下载并导出 .glb ｜ 切到「模型搜索」页签可直接搜模型",
                   style="Sub.TLabel").pack(side="left")
         # 副标题行右侧的版本号（M5 的第 2 处视觉位置）
         ttk.Label(subrow, text="v" + __version__, style="Ver.TLabel").pack(side="right")
 
-        card = ttk.Frame(root, style="Card.TFrame")
+        card = ttk.Frame(tab_dl, style="Card.TFrame")
         card.pack(fill="x", padx=20, pady=(6, 8))
         inner = ttk.Frame(card, style="Card.TFrame")
         inner.pack(fill="x", padx=16, pady=12)
@@ -471,7 +481,7 @@ class App:
 
         inner.columnconfigure(0, weight=1)
 
-        bar = ttk.Frame(root, style="TFrame")
+        bar = ttk.Frame(tab_dl, style="TFrame")
         bar.pack(fill="x", padx=20, pady=(2, 6))
         self.btn = ttk.Button(bar, text="开始下载", style="Accent.TButton", command=self.start)
         self.btn.pack(side="left")
@@ -483,7 +493,7 @@ class App:
         self.about_btn.pack(side="right", padx=8)
         ttk.Button(bar, text="♡ 打赏", command=self.show_donate).pack(side="right")
 
-        progwrap = ttk.Frame(root, style="TFrame")
+        progwrap = ttk.Frame(tab_dl, style="TFrame")
         progwrap.pack(fill="x", padx=20, pady=(2, 8))
 
         prow = ttk.Frame(progwrap, style="TFrame")
@@ -497,7 +507,7 @@ class App:
                                     style="Bar.Horizontal.TProgressbar")
         self.pbar.pack(fill="x", pady=(5, 0))
 
-        logwrap = ttk.Frame(root, style="Card.TFrame")
+        logwrap = ttk.Frame(tab_dl, style="Card.TFrame")
         logwrap.pack(fill="both", expand=True, padx=20, pady=(0, 6))
         self.log = tk.Text(logwrap, wrap="word", bg="#0f172a", fg="#d7e0ef",
                            insertbackground="#d7e0ef", relief="flat",
@@ -507,8 +517,12 @@ class App:
         self.log.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        self.status = ttk.Label(root, text="就绪", style="Sub.TLabel")
+        self.status = ttk.Label(tab_dl, text="就绪", style="Sub.TLabel")
         self.status.pack(fill="x", padx=22, pady=(0, 10))
+
+        # ---------------- 模型搜索页签（v1.2.0） ----------------
+        self._init_search_state()
+        self._build_search_tab(tab_search)
 
         # 按配置决定引擎走哪条解密后端（legacy = 把 RES 从 PATH 剔除）
         self.decrypt_mode = self.apply_node_visibility(self.cfg.get("decrypt_backend"))
@@ -516,6 +530,207 @@ class App:
         root.after(120, self.drain)
         self.url_text.focus_set()
         self.precheck()
+
+    # ---------------- 模型搜索（v1.2.0） ----------------
+    def _init_search_state(self):
+        self.search_gen = 0              # 请求代号，丢弃过期结果
+        self.search_busy = False
+        self.search_items = []
+        self.search_cursor_stack = [None]   # 第 1 页用 None，之后压入各页 cursor
+        self.search_next_cursor = None
+        self.search_thumbs = []          # 预留给缩略图（当前版本不加载图片）
+
+    def _build_search_tab(self, parent):
+        """搜索页签：关键词 / 过滤 / 排序 / 结果列表 / 翻页 / 一键下载。"""
+        top = ttk.Frame(parent, style="TFrame")
+        top.pack(fill="x", padx=20, pady=(16, 8))
+        ttk.Label(top, text="搜索 Sketchfab 模型", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(top, text="官方公开接口，免登录；结果可直接加入下载队列",
+                  style="Sub.TLabel").pack(anchor="w", pady=(2, 0))
+
+        row = ttk.Frame(parent, style="Card.TFrame")
+        row.pack(fill="x", padx=20, pady=(0, 8))
+        inner = ttk.Frame(row, style="Card.TFrame")
+        inner.pack(fill="x", padx=16, pady=12)
+
+        self.search_var = tk.StringVar()
+        ent = ttk.Entry(inner, textvariable=self.search_var,
+                        font=("Microsoft YaHei UI", 11))
+        ent.pack(side="left", fill="x", expand=True, ipady=4)
+        ent.bind("<Return>", lambda _e: self._search_go(None, reset=True))
+        self.search_btn = ttk.Button(inner, text="搜索", style="Accent.TButton",
+                                     command=lambda: self._search_go(None, reset=True))
+        self.search_btn.pack(side="left", padx=(10, 12))
+
+        self.search_dl_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(inner, text="只看可下载", variable=self.search_dl_var).pack(side="left")
+        ttk.Label(inner, text="  排序", style="Card.TLabel").pack(side="left")
+        self.search_sort_var = tk.StringVar(value="相关度")
+        sort_box = ttk.Combobox(inner, textvariable=self.search_sort_var, width=10,
+                                state="readonly", values=list(sfsearch.SORT_OPTIONS),
+                                font=("Microsoft YaHei UI", 9))
+        sort_box.pack(side="left", padx=(4, 0))
+
+        treewrap = ttk.Frame(parent, style="TFrame")
+        treewrap.pack(fill="both", expand=True, padx=20, pady=(0, 6))
+        cols = ("name", "author", "faces", "download", "license", "anim")
+        self.search_tree = ttk.Treeview(treewrap, columns=cols, show="headings",
+                                        selectmode="extended")
+        headers = (("name", "模型名称", 300), ("author", "作者", 130),
+                   ("faces", "面数", 90), ("download", "下载", 70),
+                   ("license", "许可", 170), ("anim", "动画", 60))
+        for key, label, width in headers:
+            self.search_tree.heading(key, text=label)
+            self.search_tree.column(key, width=width, anchor="w",
+                                    stretch=(key == "name"))
+        sb = ttk.Scrollbar(treewrap, command=self.search_tree.yview)
+        self.search_tree.configure(yscrollcommand=sb.set)
+        self.search_tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self.search_tree.tag_configure("nodl", foreground="#9aa1ad")
+        self.search_tree.bind("<Double-1>", lambda _e: self._open_selected_page())
+
+        foot = ttk.Frame(parent, style="TFrame")
+        foot.pack(fill="x", padx=20, pady=(2, 4))
+        self.prev_btn = ttk.Button(foot, text="← 上一页", command=self._search_prev,
+                                   state="disabled")
+        self.prev_btn.pack(side="left")
+        self.next_btn = ttk.Button(foot, text="下一页 →", command=self._search_next,
+                                   state="disabled")
+        self.next_btn.pack(side="left", padx=8)
+        ttk.Button(foot, text="打开原页", command=self._open_selected_page).pack(side="right")
+        self.download_sel_btn = ttk.Button(foot, text="下载选中", style="Accent.TButton",
+                                           command=self._download_selected)
+        self.download_sel_btn.pack(side="right", padx=8)
+
+        self.search_status = ttk.Label(parent, text="输入关键词后回车或点「搜索」",
+                                       style="Sub.TLabel")
+        self.search_status.pack(fill="x", padx=22, pady=(0, 12))
+
+    def _search_go(self, cursor, reset=False):
+        if self.search_busy:
+            return
+        query = self.search_var.get().strip()
+        if not query:
+            messagebox.showwarning("提示", "请输入搜索关键词")
+            return
+        sort = sfsearch.SORT_OPTIONS.get(self.search_sort_var.get())
+        downloadable = bool(self.search_dl_var.get())
+        self.search_gen += 1
+        gen = self.search_gen
+        self.search_busy = True
+        self.search_btn.configure(state="disabled", text="搜索中…")
+        self.search_status.configure(text="正在搜索「%s」…" % query)
+        threading.Thread(target=self._search_worker,
+                         args=(gen, query, downloadable, sort, cursor, reset),
+                         daemon=True).start()
+
+    def _search_worker(self, gen, query, downloadable, sort, cursor, reset):
+        try:
+            page = sfsearch.search_models(query, downloadable=downloadable,
+                                          sort=sort, cursor=cursor)
+            self.q.put(("search_done", (gen, query, page, cursor, reset)))
+        except Exception as e:
+            self.q.put(("search_error", (gen, str(e))))
+
+    def _render_search_page(self, gen, query, page, cursor, reset):
+        if gen != self.search_gen:            # 用户已经发了新搜索，丢弃旧结果
+            return
+        self.search_busy = False
+        self.search_btn.configure(state="normal", text="搜索")
+        if reset or not self.search_cursor_stack:
+            self.search_cursor_stack = [None]
+        elif cursor is not None:
+            self.search_cursor_stack.append(cursor)
+        elif len(self.search_cursor_stack) > 1:
+            self.search_cursor_stack = [None]
+        self.search_next_cursor = page.get("next_cursor")
+        items = page.get("items") or []
+        self.search_items = items
+
+        self.search_tree.delete(*self.search_tree.get_children())
+        for i, it in enumerate(items):
+            self.search_tree.insert(
+                "", "end", iid=str(i),
+                values=(it["name"], it["author"], "{:,}".format(it["faces"]),
+                        "可下载" if it["downloadable"] else "仅浏览",
+                        it["license"],
+                        ("%d 段" % it["animations"]) if it["animations"] else "—"),
+                tags=() if it["downloadable"] else ("nodl",))
+
+        self.prev_btn.configure(state="normal" if len(self.search_cursor_stack) > 1 else "disabled")
+        self.next_btn.configure(state="normal" if self.search_next_cursor else "disabled")
+        page_no = len(self.search_cursor_stack)
+        if items:
+            self.search_status.configure(
+                text="「%s」第 %d 页：%d 个结果（双击打开原页；选中后可一键下载）"
+                     % (query, page_no, len(items)))
+        else:
+            self.search_status.configure(text="「%s」没有找到结果，换个关键词试试" % query)
+            if not reset:
+                self.logline("搜索「%s」到头了，没有更多结果" % query, WARN)
+
+    def _on_search_error(self, gen, message):
+        if gen != self.search_gen:
+            return
+        self.search_busy = False
+        self.search_btn.configure(state="normal", text="搜索")
+        self.search_status.configure(text="搜索失败：%s" % message)
+        self.logline("⚠ 模型搜索失败：%s" % message, ERR)
+
+    def _selected_items(self):
+        out = []
+        for iid in self.search_tree.selection():
+            try:
+                out.append(self.search_items[int(iid)])
+            except (ValueError, IndexError):
+                continue
+        return out
+
+    def _open_selected_page(self):
+        picked = self._selected_items()
+        if not picked:
+            messagebox.showinfo("提示", "请先在结果列表里选中一个模型")
+            return
+        for it in picked[:5]:
+            if it.get("url"):
+                webbrowser.open(it["url"])
+
+    def _download_selected(self):
+        picked = self._selected_items()
+        if not picked:
+            messagebox.showinfo("提示", "请先在结果列表里选中模型（可按住 Ctrl 多选）")
+            return
+        urls = [it["url"] for it in picked if it.get("url")]
+        skipped = [it for it in picked if not it.get("downloadable")]
+        if skipped:
+            self.logline("⚠ 已跳过 %d 个「仅浏览」模型（Sketchfab 未开放下载）"
+                         % len(skipped), WARN)
+            urls = [it["url"] for it in picked if it.get("url") and it.get("downloadable")]
+        if not urls:
+            messagebox.showwarning("提示", "选中的模型都不允许下载，请用「打开原页」查看")
+            return
+        existing = self.url_text.get("1.0", "end")
+        if existing.strip() and not existing.endswith("\n"):
+            self.url_text.insert("end", "\n")
+        self.url_text.insert("end", "\n".join(urls) + "\n")
+        self.nb.select(0)
+        self.logline("· 搜索结果已加入下载列表：%d 个模型" % len(urls), OK)
+        if self.busy:
+            self.status.configure(text="已加入下载列表；当前批次结束后点「开始下载」")
+        else:
+            self.start()
+
+    def _search_next(self):
+        if self.search_next_cursor and not self.search_busy:
+            self._search_go(self.search_next_cursor)
+
+    def _search_prev(self):
+        if self.search_busy or len(self.search_cursor_stack) < 2:
+            return
+        self.search_cursor_stack.pop()
+        prev = self.search_cursor_stack.pop()   # _search_go 会重新压回当前页
+        self._search_go(prev)
 
     # ---------------- 基础 ----------------
     def logline(self, text, color=None):
@@ -1098,6 +1313,10 @@ class App:
                         text=f"{self.finished} / {self.total} 完成（成功 {self.ok_count}，失败 {self.fail_count}）")
                 elif kind == "update_done":
                     self._render_update_result(payload)
+                elif kind == "search_done":
+                    self._render_search_page(*payload)
+                elif kind == "search_error":
+                    self._on_search_error(*payload)
                 elif kind == "batch_done":
                     self.finish()
         except queue.Empty:
