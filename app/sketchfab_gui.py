@@ -1107,6 +1107,10 @@ class App:
             log("  → %s（%.1f KB）" % (p.name, p.stat().st_size / 1024.0), OK)
         log("  说明：贴图颜色不能无损转进 3MF，含贴图的材质按常量色输出；"
             "多色请导入 .3mf，.stl 只保留几何。")
+        log("  直接可用：已摆正 Z-up、换算到毫米、底面贴在平台 Z=0 上、法线朝外；"
+            "导入切片软件后如需居中请自行移动。", OK)
+        log("  3MF 的 displaycolor 只用于显示，实际打印颜色由切片软件的"
+            "材料 / 耗材映射决定。")
         self.q.put(("print_done", (True, "转换完成：同目录已生成 .stl 与 .3mf")))
 
     def save_patch(self, patch):

@@ -18,6 +18,18 @@ GLB → 3D 打印文件（二进制 STL + 3MF）。纯 Python 标准库实现，
   ``<basematerials>`` 写多色，颜色来自 glTF 的
   ``pbrMetallicRoughness.baseColorFactor``（线性 → sRGB）。
 
+「直接可用」保证（切片软件导入即可打印）
+----------------------------------------
+* STL 与 3MF 的顶点统一平移到正八分象限，最小点落在 ``(0, 0, 0)``：
+  模型底面贴在打印平台上，不会沉到平台下方被切掉。
+* 闭合网格的有向体积为负时整体翻转三角形绕序，保证法线朝外；
+  STL 法线与绕序一致，3MF 三角形按 CCW 书写。
+* 3MF 严格按 Core Spec：``resources`` 内所有 ``id`` 全局唯一，
+  ``<object>`` 同时带 ``pid`` 与 ``pindex``，``<metadata>`` 只用规范表 3-1
+  的 well-known 名称；三角形不足 4 个时不谎称 ``type="model"``，
+  降级为 ``other`` 并在日志里提示这类网格通常无法直接打印。
+* 两种格式共用同一份几何，尺寸、朝向、摆放完全一致。
+
 已知限制（会在转换日志里如实说明）
 ----------------------------------
 * 贴图颜色无法无损转进 3MF：只取材质的 baseColorFactor 常量色，
@@ -46,6 +58,7 @@ from urllib.parse import unquote
 __all__ = [
     "PrintExportError", "Mesh", "load_glb", "extract_mesh",
     "write_stl", "write_3mf", "convert",
+    "placement_offset", "placed_vertices",
 ]
 
 
@@ -384,11 +397,46 @@ def _finite(p):
     return all(math.isfinite(float(v)) for v in p)
 
 
+def _signed_volume(vertices, faces):
+    """闭合网格的有向体积；> 0 表示法线朝外，< 0 表示整体绕序反了。"""
+    total = 0.0
+    for i0, i1, i2, _c in faces:
+        a, b, c = vertices[i0], vertices[i1], vertices[i2]
+        total += (a[0] * (b[1] * c[2] - b[2] * c[1])
+                  + a[1] * (b[2] * c[0] - b[0] * c[2])
+                  + a[2] * (b[0] * c[1] - b[1] * c[0]))
+    return total / 6.0
+
+
+def placement_offset(mesh):
+    """把模型放到平台上方所需的平移量（mm）：让被引用顶点的最小坐标落在 (0,0,0)。
+
+    切片软件按 STL / 3MF 里的绝对坐标摆放模型；负 Z 会让模型沉到平台下被切掉。
+    只统计「被三角形实际引用」的有限顶点，避免坏顶点占位影响摆放。
+    """
+    used = set()
+    for face in mesh.faces:
+        used.update(face[:3])
+    pts = [mesh.vertices[i] for i in used if _finite(mesh.vertices[i])]
+    if not pts:
+        return (0.0, 0.0, 0.0)
+    return tuple(-min(float(p[i]) for p in pts) for i in range(3))
+
+
+def placed_vertices(mesh, offset=None):
+    """返回平移到正八分象限后的顶点列表（不改原 mesh；幂等）。"""
+    dx, dy, dz = offset if offset is not None else placement_offset(mesh)
+    if dx == 0.0 and dy == 0.0 and dz == 0.0:
+        return list(mesh.vertices)
+    return [(v[0] + dx, v[1] + dy, v[2] + dz) for v in mesh.vertices]
+
+
 class Mesh:
     """从 GLB 抽出的、已变换到 Z-up 且已换算单位的三角网格。"""
 
     __slots__ = ("vertices", "faces", "colors", "scale", "unit_note",
-                 "bbox", "skipped", "primitives", "axis_fixed", "name")
+                 "bbox", "skipped", "primitives", "axis_fixed", "name",
+                 "normals_fixed")
 
     def __init__(self):
         self.vertices = []       # list[(x, y, z)]
@@ -401,6 +449,7 @@ class Mesh:
         self.primitives = 0
         self.axis_fixed = True
         self.name = "model"
+        self.normals_fixed = False
 
     @property
     def triangle_count(self):
@@ -497,6 +546,12 @@ def extract_mesh(doc, *, fix_up_axis=True, scale=None, name="model"):
     mesh.bbox = tuple((hi[i] - lo[i]) * factor for i in range(3))
     if factor != 1.0:
         mesh.vertices = [tuple(v * factor for v in p) for p in mesh.vertices]
+
+    # 法线朝外：闭合网格的有向体积为负说明整体绕序反了（部分导出器会这样），
+    # 翻转后切片软件才会把它当成实体，而不是把它当成「内部」。
+    if _signed_volume(mesh.vertices, mesh.faces) < -1e-9:
+        mesh.faces = [(a, c, b, ci) for a, b, c, ci in mesh.faces]
+        mesh.normals_fixed = True
     return mesh
 
 
@@ -505,13 +560,14 @@ _STL_HEADER = b"Sketchfab Downloader | GLB-to-print binary STL".ljust(80, b" ")[
 
 
 def write_stl(path, mesh):
-    """写二进制 STL（每三角形 50 字节，小端 float32）。"""
+    """写二进制 STL（每三角形 50 字节，小端 float32），顶点已放到平台上方。"""
     p = Path(path)
+    verts = placed_vertices(mesh)
     with p.open("wb") as f:
         f.write(_STL_HEADER)
         f.write(struct.pack("<I", len(mesh.faces)))
         for i0, i1, i2, _c in mesh.faces:
-            a, b, c = mesh.vertices[i0], mesh.vertices[i1], mesh.vertices[i2]
+            a, b, c = verts[i0], verts[i1], verts[i2]
             n = _normal(a, b, c)
             f.write(struct.pack(
                 "<12fH",
@@ -547,6 +603,10 @@ def _xml_escape(s):
 
 
 def _build_model_xml(mesh):
+    verts = placed_vertices(mesh)
+    # Core Spec：<object type="model"> 的 mesh 至少要 4 个三角形才能构成实体；
+    # 单/双三角形不能谎称实体，降级为 other（切片软件仍能显示几何）。
+    obj_type = "model" if mesh.triangle_count >= 4 else "other"
     parts = ['<?xml version="1.0" encoding="UTF-8"?>',
              '<model unit="millimeter" xml:lang="en-US" xmlns="%s">' % _MODEL_NS,
              ' <metadata name="Application">Sketchfab Downloader</metadata>',
@@ -554,17 +614,21 @@ def _build_model_xml(mesh):
              ' <resources>', '  <basematerials id="1">']
     for i, color in enumerate(mesh.colors):
         parts.append('   <base name="mat%d" displaycolor="%s"/>' % (i, color))
+    # id 必须在整个 <resources> 内全局唯一：basematerials 占 1，object 占 2。
+    # pid 指向 basematerials 组；pindex 是组内默认属性索引（规范：三角形带
+    # p1 时，object 必须同时给出 pid 与 pindex）。
     parts += ['  </basematerials>',
-              '  <object id="1" name="%s" type="model" pid="1">' % _xml_escape(mesh.name),
+              '  <object id="2" name="%s" type="%s" pid="1" pindex="0">'
+              % (_xml_escape(mesh.name), obj_type),
               '   <mesh>', '    <vertices>']
-    for v in mesh.vertices:
+    for v in verts:
         parts.append('     <vertex x="%.6f" y="%.6f" z="%.6f"/>' % v)
     parts += ['    </vertices>', '    <triangles>']
     for i0, i1, i2, cidx in mesh.faces:
         parts.append('     <triangle v1="%d" v2="%d" v3="%d" p1="%d"/>'
                      % (i0, i1, i2, cidx))
     parts += ['    </triangles>', '   </mesh>', '  </object>',
-              ' </resources>', ' <build>', '  <item objectid="1"/>',
+              ' </resources>', ' <build>', '  <item objectid="2"/>',
               ' </build>', '</model>', '']
     return "\n".join(parts)
 
@@ -606,6 +670,19 @@ def convert(glb_path, stl_path=None, mf3_path=None, *,
     say("展开场景图、节点变换与三角形…")
     mesh = extract_mesh(doc, fix_up_axis=fix_up_axis, scale=scale, name=src.stem)
 
+    off = placement_offset(mesh)
+    if any(abs(v) > 1e-9 for v in off):
+        say("摆放：把模型平移到平台上方（正八分象限），偏移 (%.2f, %.2f, %.2f) mm" % off)
+    else:
+        say("摆放：模型已在平台上方（正八分象限），无需平移")
+    if mesh.normals_fixed:
+        say("法线：有向体积为负，已整体翻转绕序，保证法线朝外")
+    else:
+        say("法线：方向朝外，无需翻转")
+    if mesh.triangle_count < 4:
+        say('⚠ 仅 %d 个三角形：3MF 按 type="other" 输出（不足 4 个三角形不能声明为实体），这类网格通常无法直接打印'
+            % mesh.triangle_count)
+
     made = []
     if want_stl:
         say("写出二进制 STL…")
@@ -630,5 +707,8 @@ def convert(glb_path, stl_path=None, mf3_path=None, *,
         "unit_note": mesh.unit_note,
         "bbox_mm": [round(v, 3) for v in mesh.bbox],
         "axis_fixed": mesh.axis_fixed,
+        "placement_mm": [round(v, 3) for v in off],
+        "normals_fixed": mesh.normals_fixed,
+        "object_type": "model" if mesh.triangle_count >= 4 else "other",
         "bytes": {str(p): p.stat().st_size for p in made},
     }

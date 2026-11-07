@@ -81,6 +81,44 @@ def _tri_glb(tmp_path, name="tri.glb", **kw):
     return _write(tmp_path, name, gltf, bin_data)
 
 
+def _cube_glb(tmp_path, name="cube.glb", *, flip=False, materials=None):
+    """边长 1、含负坐标、CCW 外向的封闭立方体；flip=True 时整体反向绕序。"""
+    v = [(-.5, -.5, -.5), (.5, -.5, -.5), (.5, .5, -.5), (-.5, .5, -.5),
+         (-.5, -.5, .5), (.5, -.5, .5), (.5, .5, .5), (-.5, .5, .5)]
+    tris = [(0, 2, 1), (0, 3, 2),      # -Z
+            (4, 5, 6), (4, 6, 7),      # +Z
+            (0, 1, 5), (0, 5, 4),      # -Y
+            (3, 7, 6), (3, 6, 2),      # +Y
+            (0, 4, 7), (0, 7, 3),      # -X
+            (1, 2, 6), (1, 6, 5)]      # +X
+    if flip:
+        tris = [(a, c, b) for a, b, c in tris]
+    idx = [i for t in tris for i in t]
+    pos = b"".join(struct.pack("<3f", *p) for p in v)
+    ib = b"".join(struct.pack("<H", i) for i in idx)
+    gltf = {
+        "asset": {"version": "2.0"}, "scene": 0,
+        "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{
+            "attributes": {"POSITION": 0}, "indices": 1, "mode": 4,
+            **({"material": 0} if materials else {}),
+        }]}],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 8, "type": "VEC3"},
+            {"bufferView": 1, "componentType": 5123,
+             "count": len(idx), "type": "SCALAR"},
+        ],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": len(pos)},
+            {"buffer": 0, "byteOffset": len(pos), "byteLength": len(ib)},
+        ],
+        "buffers": [{"byteLength": len(pos) + len(ib)}],
+    }
+    if materials:
+        gltf["materials"] = materials
+    return _write(tmp_path, name, gltf, pos + ib)
+
+
 # ---------------------------------------------------------------- 依赖
 def test_module_is_dependency_clean():
     """只允许标准库：不引入 numpy / trimesh / Pillow，也别 import 项目 GUI 模块。"""
@@ -364,7 +402,13 @@ def test_write_3mf_opc_structure_and_multicolor(tmp_path):
     assert "3dmodel" in rels and "rel0" in rels
     assert 'unit="millimeter"' in model
     assert 'displaycolor="#0000FF"' in model
-    assert '<item objectid="1"/>' in model
+    # v1.2.6：resources 内 id 全局唯一、object 必须带 pindex、
+    # 单三角形不谎称 type="model"（Core Spec 要求 >= 4 个三角形）
+    assert '<basematerials id="1">' in model
+    assert '<object id="2"' in model
+    assert 'pindex="0"' in model
+    assert 'type="other"' in model
+    assert '<item objectid="2"/>' in model
     assert '<triangle v1="0" v2="1" v3="2" p1="0"/>' in model
 
     ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
@@ -460,6 +504,9 @@ def test_gui_wires_convert_button_and_queue():
     assert 'elif kind == "print_log":' in src
     assert 'elif kind == "print_done":' in src
     assert "print_export.convert(glb_path" in src
+    # v1.2.6：转换完成日志要说清「直接可用」的摆放 / 法线与颜色限制
+    assert "直接可用：已摆正 Z-up" in src
+    assert "displaycolor 只用于显示" in src
     # 只加转换按钮：下载流程入口保持不变
     assert "def start(self):" in src
     assert "def download_task(" in src
@@ -470,3 +517,112 @@ def test_both_specs_include_print_export():
     for name in ("Sketchfab下载器.spec", "single_file.spec"):
         src = (ROOT / "build" / name).read_text(encoding="utf-8")
         assert '"print_export"' in src, "%s 缺少 hiddenimports" % name
+
+
+# ------------------------------------------------- v1.2.6「直接可用」加固
+def _model_root(model_xml):
+    ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+    root = ET.fromstring(model_xml)
+    ids = [el.get("id") for el in root.iter() if el.get("id")]
+    assert ids and len(ids) == len(set(ids)), "resources 内 id 不唯一：%s" % ids
+    return root, ns
+
+
+def test_3mf_resource_ids_unique_pindex_and_type(tmp_path):
+    path = _cube_glb(tmp_path, materials=[
+        {"pbrMetallicRoughness": {"baseColorFactor": [1, 0, 0, 1]}}])
+    res = pe.convert(path, want_stl=False)
+    with zipfile.ZipFile(res["3mf"]) as z:
+        model = z.read("3D/3dmodel.model").decode("utf-8")
+    root, _ns = _model_root(model)
+    assert 'type="model"' in model               # 12 个三角形 → 合法实体
+    assert 'pindex="0"' in model
+    assert 'pid="1"' in model
+    assert '<item objectid="2"/>' in model
+    assert res["object_type"] == "model"
+    assert [el.get("id") for el in root.iter() if el.get("id")] == ["1", "2"]
+
+
+def test_3mf_metadata_only_spec_wellknown_names(tmp_path):
+    # 规范表 3-1 的 well-known 名称；Application 是允许的，自定义名必须带命名空间
+    allowed = {"Title", "Designer", "Description", "Copyright",
+               "LicenseTerms", "Rating", "CreationDate",
+               "ModificationDate", "Application"}
+    res = pe.convert(_cube_glb(tmp_path), want_stl=False)
+    with zipfile.ZipFile(res["3mf"]) as z:
+        model = z.read("3D/3dmodel.model").decode("utf-8")
+    ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+    root = ET.fromstring(model)
+    names = [m.get("name") for m in root.findall(".//m:metadata", ns)]
+    assert names and set(names) <= allowed
+    assert len(names) == len(set(names))
+
+
+def test_stl_and_3mf_share_platform_placement(tmp_path):
+    """负坐标模型必须被平移到正八分象限，且两种格式几何完全一致。"""
+    res = pe.convert(_cube_glb(tmp_path))
+    assert res["placement_mm"] == [500.0, 500.0, 500.0]
+
+    raw = Path(res["stl"]).read_bytes()
+    count = struct.unpack_from("<I", raw, 80)[0]
+    stl_pts = []
+    for k in range(count):
+        vals = struct.unpack_from("<12fH", raw, 84 + 50 * k)
+        stl_pts += [tuple(vals[3:6]), tuple(vals[6:9]), tuple(vals[9:12])]
+    assert min(min(p) for p in stl_pts) >= -1e-4
+    assert min(p[2] for p in stl_pts) == pytest.approx(0.0, abs=1e-4)
+
+    with zipfile.ZipFile(res["3mf"]) as z:
+        model = z.read("3D/3dmodel.model").decode("utf-8")
+    ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+    root = ET.fromstring(model)
+    mf_pts = [(float(v.get("x")), float(v.get("y")), float(v.get("z")))
+              for v in root.findall(".//m:vertex", ns)]
+    assert min(min(p) for p in mf_pts) >= -1e-9
+    assert min(p[2] for p in mf_pts) == pytest.approx(0.0, abs=1e-9)
+    assert sorted(set(stl_pts)) == sorted(set(mf_pts))
+
+
+def test_3mf_object_type_degrades_below_four_triangles(tmp_path):
+    res = pe.convert(_tri_glb(tmp_path), want_stl=False)
+    with zipfile.ZipFile(res["3mf"]) as z:
+        model = z.read("3D/3dmodel.model").decode("utf-8")
+    assert 'type="other"' in model
+    assert 'type="model"' not in model
+    assert res["object_type"] == "other"
+
+
+def test_normals_flipped_when_signed_volume_negative(tmp_path):
+    good = _cube_glb(tmp_path, "good.glb")
+    bad = _cube_glb(tmp_path, "bad.glb", flip=True)
+    a = pe.extract_mesh(pe.load_glb(good), scale=1.0)
+    b = pe.extract_mesh(pe.load_glb(bad), scale=1.0)
+    assert a.normals_fixed is False
+    assert b.normals_fixed is True
+    assert b.faces == a.faces
+    na = pe._normal(*(a.vertices[i] for i in a.faces[0][:3]))
+    nb = pe._normal(*(b.vertices[i] for i in b.faces[0][:3]))
+    assert nb == pytest.approx(na, abs=1e-6)
+    assert pe._signed_volume(b.vertices, b.faces) > 0
+
+
+def test_placement_offset_ignores_unreferenced_bad_vertex(tmp_path):
+    gltf, bin_data = _simple_gltf(
+        [(10, 10, 10), (11, 10, 10), (10, 11, 10), (-100, -100, -100)],
+        [0, 1, 2])
+    m = pe.extract_mesh(pe.load_glb(
+        _write(tmp_path, "off.glb", gltf, bin_data)), scale=1.0)
+    # Y-up → Z-up 后 (10,10,10) → (10,-10,10)；未被引用的 -100 顶点不能影响摆放
+    assert pe.placement_offset(m) == pytest.approx((-10.0, 10.0, -10.0))
+
+
+def test_convert_reports_placement_and_normals(tmp_path):
+    seen = []
+    res = pe.convert(_cube_glb(tmp_path, "flip.glb", flip=True),
+                     log=seen.append)
+    assert res["normals_fixed"] is True
+    assert res["object_type"] == "model"
+    assert res["placement_mm"] == [500.0, 500.0, 500.0]
+    assert any("平移到平台上方" in s for s in seen)
+    assert any("翻转绕序" in s for s in seen)
+    assert any("法线" in s for s in seen)

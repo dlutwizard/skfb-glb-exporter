@@ -6,6 +6,38 @@
 打包时本文件会被复制到 `_internal/CHANGELOG.md`，「关于」面板离线读取它，
 因此日志正文必须是纯文本 Markdown，不要写图片或外链依赖。
 
+## [1.2.6] - 2026-11-07
+
+把 GLB → STL / 3MF 加固到切片软件导入即可打印，并按 3MF Core Spec 1.4 独立验证通过。
+
+### 直接可用修正
+
+- STL 与 3MF 共用同一份几何，顶点统一平移到正八分象限、最小点落在
+  `(0, 0, 0)`：底面贴在打印平台上，不会因负 Z 沉到平台下方被切掉。
+- 闭合网格的有向体积为负时整体翻转三角形绕序，保证法线朝外；STL 法线
+  与绕序一致，3MF 三角形按 CCW 书写。
+- 3MF 按 Core Spec 1.4 修正：`resources` 内所有 `id` 全局唯一
+  （`basematerials` = 1、`object` = 2，`build/item.objectid` 同步）；
+  `<object>` 同时带 `pid` 与 `pindex`；三角形不足 4 个时不再谎称
+  `type="model"`，降级为 `other` 并在日志提示这类网格通常无法直接打印。
+- 转换日志新增摆放偏移 / 法线是否翻转 / 3MF object 类型；结果统计新增
+  `placement_mm`、`normals_fixed`、`object_type` 便于核对。
+- GUI 转换完成日志补充「已贴在平台 Z=0、法线朝外、导入后按需居中」以及
+  `displaycolor 只用于显示` 的规范说明。
+
+### 验证
+
+- 独立验证脚本用 `trimesh` 加载 STL / 3MF（watertight、winding、volume、
+  bounds、euler），用 `lxml` 按 Core Spec 检查 OPC、id 唯一性、metadata、
+  `pid` / `pindex`、`p1` 范围、三角形数与坐标；正常立方体与反向绕序立方体
+  两个样本均为 0 问题。
+- `tests/test_print_export.py` 新增 7 条「直接可用」回归用例（34 条全通过）。
+
+### 说明
+
+- 3MF 的 `displaycolor` 按规范只用于渲染显示，实际打印颜色由切片软件的
+  材料 / 耗材映射决定；导入后如需把模型移到平台中心，请在切片软件里移动。
+
 ## [1.2.5] - 2026-11-07
 
 新增 GLB → 3D 打印文件转换：一键导出二进制 STL 与带颜色的 3MF，纯标准库实现、零新增打包依赖。
