@@ -246,6 +246,12 @@ def apply(root, style) -> dict:
     _map(style, "Treeview.Heading",
          background=[("active", LINE)],
          foreground=[("active", TEXT)])
+    # 搜索结果表：行内 64x36 缩略图需要更高行高（v1.2.4）。
+    # 用独立的变体样式，不影响「关于 / 诊断」面板里的表格。
+    _configure(style, "Preview.Treeview", rowheight=46)
+    _map(style, "Preview.Treeview",
+         background=[("selected", ACCENT)],
+         foreground=[("selected", ON_ACCENT)])
 
     # --- 进度条 / 滚动条 -----------------------------------------------
     _configure(style, "TProgressbar", troughcolor=SURFACE2,

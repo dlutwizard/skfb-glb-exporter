@@ -15,6 +15,7 @@ v1.1 新增：
   * 配置与程序分离（默认 %APPDATA%，程序目录内有 config.json 则为便携模式）
   * 资源目录前置进 PATH，让引擎的 shutil.which("node") 能找到随包 node.exe
 """
+import base64
 import json
 import os
 import queue
@@ -28,6 +29,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
+from fractions import Fraction
 from pathlib import Path
 
 import tkinter as tk
@@ -50,11 +52,46 @@ if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
 import diagnostics as diag                                     # noqa: E402
+import image_codec                                             # noqa: E402
 import sketchfab_search as sfsearch                            # noqa: E402
 import ui_theme as theme                                       # noqa: E402
 import update_checker                                          # noqa: E402
 from version import (APP_ID, APP_NAME, CHANGELOG_HEAD, SINGLE_FILE_EXPERIMENTAL,  # noqa: E402
                      VERSION_TUPLE, __version__)
+
+
+def _placeholder_photo(master, w, h):
+    """「图片位」占位图：深色底 + 细线空心方框，不依赖任何图片文件。
+
+    显式绑定 master：同一进程里可能存在多个 Tk() 实例（pytest / 多窗口），
+    依赖默认 ``_default_root`` 会把图片建到别的解释器里，Label 随后找不到它。
+    """
+    ph = tk.PhotoImage(master=master, width=w, height=h)
+    ph.put(theme.SURFACE2, to=(0, 0, w - 1, h - 1))
+    x0, y0 = max(5, w // 5), max(5, h // 4)
+    x1, y1 = w - x0 - 1, h - y0 - 1
+    ph.put(theme.LINE, to=(x0, y0, x1, y0))
+    ph.put(theme.LINE, to=(x0, y1, x1, y1))
+    ph.put(theme.LINE, to=(x0, y0, x0, y1))
+    ph.put(theme.LINE, to=(x1, y0, x1, y1))
+    return ph
+
+
+def _scale_photo(ph, target_w):
+    """把 PhotoImage 近似缩到 target_w 宽。
+
+    Tk 的 PhotoImage 只有整数倍 zoom / subsample，用最简分数逼近目标比例；
+    256x144 → 3/4 → 192x108，正好放进右侧预览面板。
+    """
+    w = max(1, ph.width())
+    if w == target_w:
+        return ph
+    frac = Fraction(target_w, w).limit_denominator(8)
+    a, b = frac.numerator, frac.denominator
+    if a == b or a < 1 or b < 1:
+        return ph
+    return ph.zoom(a, a).subsample(b, b)
+
 
 CONVERT = RES / "convert.mjs"
 EXTLIB = RES / "extlib"
@@ -618,7 +655,13 @@ class App:
         self.search_items = []
         self.search_cursor_stack = [None]   # 第 1 页用 None，之后压入各页 cursor
         self.search_next_cursor = None
-        self.search_thumbs = []          # 预留给缩略图（当前版本不加载图片）
+        self.search_thumbs = []          # 当前页行内缩略图的 PhotoImage 引用（防 GC）
+        self.thumb_cache = {}            # url -> 原尺寸 PhotoImage，翻页复用不重复下载
+        self.thumb_executor = ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="sfd-thumb")
+        self._ph_small = None            # 64x36 行内占位图
+        self._ph_big = None              # 192x108 预览占位图
+        self.preview_photo = None        # 预览面板当前大图引用
 
     def _build_search_tab(self, parent):
         """搜索页签：关键词 / 过滤 / 排序 / 结果列表 / 翻页 / 一键下载。"""
@@ -657,25 +700,68 @@ class App:
         treewrap = tk.Frame(parent, bg=theme.SURFACE, highlightthickness=1,
                             highlightbackground=theme.LINE)
         treewrap.pack(fill="both", expand=True, padx=26, pady=(0, 6))
+
+        # 右侧：选中结果后的大图预览（v1.2.4）。先 pack 的 right 更靠右，
+        # 所以顺序是「预览面板 → 分隔线 → 左侧结果表」。
+        self.preview_panel = tk.Frame(treewrap, bg=theme.SURFACE, width=232)
+        self.preview_panel.pack(side="right", fill="y", padx=(0, 10), pady=10)
+        self.preview_panel.pack_propagate(False)
+        tk.Frame(treewrap, bg=theme.LINE, width=1).pack(
+            side="right", fill="y", pady=10)
+        left = tk.Frame(treewrap, bg=theme.SURFACE)
+        left.pack(side="left", fill="both", expand=True)
+
+        self._ph_small = _placeholder_photo(parent, 64, 36)
+        self._ph_big = _placeholder_photo(parent, 192, 108)
+        tk.Label(self.preview_panel, text="PREVIEW / 预览", bg=theme.SURFACE,
+                 fg=theme.MUTED, font=theme.mono(9, "bold"),
+                 anchor="w").pack(anchor="w")
+        self.preview_img = tk.Label(self.preview_panel, image=self._ph_big,
+                                    bg=theme.SURFACE2, bd=0,
+                                    highlightthickness=0)
+        self.preview_img.pack(anchor="center", pady=(12, 0))
+        self.preview_name = tk.Label(
+            self.preview_panel, text="选中一条结果查看预览",
+            bg=theme.SURFACE, fg=theme.TEXT, font=theme.body(10, bold=True),
+            wraplength=210, justify="left", anchor="w")
+        self.preview_name.pack(fill="x", anchor="w", pady=(14, 0))
+        self.preview_meta = tk.Label(
+            self.preview_panel, text="", bg=theme.SURFACE, fg=theme.MUTED,
+            font=theme.body(9), wraplength=210, justify="left", anchor="w")
+        self.preview_meta.pack(fill="x", anchor="w", pady=(6, 0))
+        self.preview_flag = tk.Label(
+            self.preview_panel, text="", bg=theme.SURFACE, fg=theme.OK,
+            font=theme.mono(9), anchor="w")
+        self.preview_flag.pack(fill="x", anchor="w", pady=(10, 0))
+        tk.Label(self.preview_panel,
+                 text="缩略图来自 Sketchfab 官方公开 CDN",
+                 bg=theme.SURFACE, fg=theme.DIM, font=theme.body(8),
+                 wraplength=210, justify="left", anchor="w").pack(
+                     side="bottom", fill="x", anchor="w", pady=(8, 0))
+
         cols = ("name", "author", "faces", "download", "license", "anim")
-        self.search_tree = ttk.Treeview(treewrap, columns=cols, show="headings",
-                                        selectmode="extended")
-        headers = (("name", "模型名称", 320), ("author", "作者", 130),
-                   ("faces", "面数", 90), ("download", "下载", 70),
-                   ("license", "许可", 170), ("anim", "动画", 60))
+        self.search_tree = ttk.Treeview(
+            left, columns=cols, show="tree headings", selectmode="extended",
+            style="Preview.Treeview")
+        self.search_tree.heading("#0", text="预览")
+        self.search_tree.column("#0", width=72, anchor="center", stretch=False)
+        headers = (("name", "模型名称", 190), ("author", "作者", 86),
+                   ("faces", "面数", 68), ("download", "下载", 56),
+                   ("license", "许可", 126), ("anim", "动画", 46))
         for key, label, width in headers:
             self.search_tree.heading(key, text=label)
             self.search_tree.column(key, width=width, anchor="w",
                                     stretch=(key == "name"))
-        sb = ttk.Scrollbar(treewrap, command=self.search_tree.yview)
+        sb = ttk.Scrollbar(left, command=self.search_tree.yview)
         self.search_tree.configure(yscrollcommand=sb.set)
         self.search_tree.pack(side="left", fill="both", expand=True, padx=1, pady=1)
         sb.pack(side="right", fill="y")
         self.search_tree.tag_configure("nodl", foreground=theme.DIM)
         self.search_tree.bind("<Double-1>", lambda _e: self._open_selected_page())
+        self.search_tree.bind("<<TreeviewSelect>>", self._on_search_select)
         # 空状态：大片空白表格里给一句引导，而不是让用户对着空表发愣
         self.search_empty = tk.Label(
-            treewrap, text="还没有搜索结果\n输入关键词，回车或点「搜索」",
+            left, text="还没有搜索结果\n输入关键词，回车或点「搜索」",
             bg=theme.SURFACE, fg=theme.DIM, font=theme.body(11),
             justify="center")
         self.search_empty.place(relx=0.5, rely=0.42, anchor="center")
@@ -742,14 +828,18 @@ class App:
         self.search_items = items
 
         self.search_tree.delete(*self.search_tree.get_children())
+        self.search_thumbs = [self._ph_small] * len(items)
+        self._clear_preview()
         for i, it in enumerate(items):
             self.search_tree.insert(
-                "", "end", iid=str(i),
+                "", "end", iid=str(i), image=self._ph_small,
                 values=(it["name"], it["author"], "{:,}".format(it["faces"]),
                         "可下载" if it["downloadable"] else "仅浏览",
                         it["license"],
                         ("%d 段" % it["animations"]) if it["animations"] else "—"),
                 tags=() if it["downloadable"] else ("nodl",))
+        # 缩略图异步加载：表格先立刻可用，图片到了再逐张回填
+        self._queue_thumbnails(gen, items)
 
         if items:
             self.search_empty.place_forget()
@@ -767,11 +857,108 @@ class App:
             if not reset:
                 self.logline("搜索「%s」到头了，没有更多结果" % query, WARN)
 
+    # ---- 搜索缩略图 / 大图预览（v1.2.4） -------------------------------
+    def _queue_thumbnails(self, gen, items):
+        """缓存命中就立刻回填，否则丢进线程池；绝不阻塞 GUI 线程。"""
+        if not image_codec.is_supported():
+            return
+        for i, it in enumerate(items):
+            url = it.get("thumbnail") or ""
+            if not url:
+                continue
+            cached = self.thumb_cache.get(url)
+            if cached is not None:
+                self.q.put(("search_thumb", (gen, i, url, None, cached)))
+            else:
+                self.thumb_executor.submit(self._thumb_worker, gen, i, url)
+
+    def _thumb_worker(self, gen, index, url):
+        """工作线程只做网络 + 转码，绝不碰 Tk 控件（Tk 不是线程安全的）。"""
+        png = None
+        try:
+            jpeg = sfsearch.fetch_thumbnail(url, timeout=sfsearch.THUMB_TIMEOUT)
+            if gen != self.search_gen:
+                return
+            png = image_codec.jpeg_to_png(jpeg)
+        except Exception:
+            png = None          # 缩略图是增强项：失败静默降级到占位图
+        self.q.put(("search_thumb", (gen, index, url, png, None)))
+
+    def _apply_thumb(self, index, url, png, cached):
+        """主线程：把 PNG 变成 PhotoImage 并贴到对应行 / 预览面板。"""
+        if cached is None and png:
+            try:
+                cached = tk.PhotoImage(data=base64.b64encode(png),
+                                       master=self.root)
+                if url:
+                    self.thumb_cache[url] = cached
+            except Exception:
+                return
+        if cached is None:
+            return
+        try:
+            factor = max(1, cached.width() // 64)
+            small = cached.subsample(factor, factor)
+        except Exception:
+            small = cached
+        if index < len(self.search_thumbs):
+            self.search_thumbs[index] = small
+        iid = str(index)
+        if self.search_tree.exists(iid):
+            self.search_tree.item(iid, image=small)
+        # 选中的正是这一行时，大图预览同步刷新
+        sel = self.search_tree.selection()
+        if sel and sel[0] == iid and index < len(self.search_items):
+            self._show_preview(self.search_items[index], cached, len(sel))
+
+    def _on_search_select(self, _e=None):
+        iids = self.search_tree.selection()
+        if not iids:
+            self._clear_preview()
+            return
+        try:
+            index = int(iids[0])
+            item = self.search_items[index]
+        except (ValueError, IndexError):
+            self._clear_preview()
+            return
+        photo = self.thumb_cache.get(item.get("thumbnail") or "")
+        self._show_preview(item, photo, len(iids))
+
+    def _show_preview(self, item, photo, selected_count=1):
+        if photo is not None:
+            try:
+                self.preview_photo = _scale_photo(photo, 192)
+                self.preview_img.configure(image=self.preview_photo)
+            except Exception:
+                self.preview_img.configure(image=self._ph_big)
+        else:
+            self.preview_img.configure(image=self._ph_big)
+        self.preview_name.configure(text=item.get("name") or "(未命名模型)")
+        meta = ("作者  %s\n面数  %s\n许可  %s"
+                % (item.get("author") or "—",
+                   "{:,}".format(item.get("faces") or 0),
+                   item.get("license") or "—"))
+        if selected_count > 1:
+            meta += "\n已选 %d 个模型" % selected_count
+        self.preview_meta.configure(text=meta)
+        if item.get("downloadable"):
+            self.preview_flag.configure(text="✓ 可下载", fg=theme.OK)
+        else:
+            self.preview_flag.configure(text="○ 仅浏览", fg=theme.DIM)
+
+    def _clear_preview(self):
+        self.preview_img.configure(image=self._ph_big)
+        self.preview_name.configure(text="选中一条结果查看预览")
+        self.preview_meta.configure(text="")
+        self.preview_flag.configure(text="")
+
     def _on_search_error(self, gen, message):
         if gen != self.search_gen:
             return
         self.search_busy = False
         self.search_btn.configure(state="normal", text="搜索")
+        self._clear_preview()
         self.search_status.configure(text="搜索失败：%s" % message)
         self.search_empty.place(relx=0.5, rely=0.42, anchor="center")
         self.logline("⚠ 模型搜索失败：%s" % message, ERR)
@@ -1416,6 +1603,10 @@ class App:
                     self._render_search_page(*payload)
                 elif kind == "search_error":
                     self._on_search_error(*payload)
+                elif kind == "search_thumb":
+                    gen, index, url, png, cached = payload
+                    if gen == self.search_gen:   # 连续搜索 / 翻页后的旧图直接丢弃
+                        self._apply_thumb(index, url, png, cached)
                 elif kind == "batch_done":
                     self.finish()
         except queue.Empty:

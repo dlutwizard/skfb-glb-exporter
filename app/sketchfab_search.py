@@ -8,7 +8,8 @@ Sketchfab 模型搜索（官方公开 API，无需登录/API key）。
   也不引用项目里的其它模块，避免打包时牵出一整条依赖链。
 * **只走 HTTPS 默认证书校验**：不降级证书校验、不关闭主机名校验，
   一律使用 urllib 的默认安全上下文。GUI 启动时安装的 certifi 修复对这里同样生效。
-* **不做任何抓取**：只调用 ``api.sketchfab.com/v3/search``。其它站点没有
+* **不做任何抓取**：搜索只调用 ``api.sketchfab.com/v3/search``，缩略图只取
+  ``media.sketchfab.com`` 上的官方公开静态图片（不解析任何页面）。其它站点没有
   等价的免鉴权公开接口，抓取页面既不稳定也可能违反站点条款，所以 v1.2.0
   的搜索范围明确限定为 Sketchfab 站内。
 * 网络层可注入（``http_get_json``），便于离线测试，也便于未来换 HTTP 客户端。
@@ -37,6 +38,11 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 DEFAULT_COUNT = 24
 MAX_COUNT = 100
 TIMEOUT = 20
+
+# 缩略图（v1.2.4）：官方 CDN 静态小图，单独设更短的超时和体积上限，
+# 避免某张图卡住整个搜索页的加载。
+THUMB_TIMEOUT = 8
+MAX_THUMB_BYTES = 2 * 1024 * 1024
 
 # 组合框显示文案 → API 的 sort_by 值；None = 不传，即官方相关度排序
 SORT_OPTIONS = {
@@ -179,3 +185,46 @@ def search_models(query, downloadable=True, sort=None, cursor=None,
     except Exception as e:
         raise SearchError("搜索失败：%s" % e)
     return parse_search_response(data)
+
+
+def _http_get_bytes(url, timeout=THUMB_TIMEOUT):
+    """下载官方 CDN 上的静态图片字节；一律走 urllib 默认证书校验。"""
+    req = urllib.request.Request(url, headers={
+        "User-Agent": UA,
+        "Accept": "image/jpeg,image/png,image/*;q=0.8",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = r.read(MAX_THUMB_BYTES + 1)
+    except urllib.error.HTTPError as e:
+        raise SearchError("缩略图服务返回 HTTP %d" % e.code)
+    except urllib.error.URLError as e:
+        raise SearchError("连不上缩略图服务：%s" % (e.reason or e))
+    except OSError as e:
+        raise SearchError("下载缩略图失败：%s" % e)
+    if not data:
+        raise SearchError("缩略图是空响应")
+    if len(data) > MAX_THUMB_BYTES:
+        raise SearchError("缩略图超过体积上限（%d 字节）" % MAX_THUMB_BYTES)
+    return data
+
+
+def fetch_thumbnail(url, timeout=THUMB_TIMEOUT, http_get=None):
+    """下载一条搜索结果的缩略图，返回原始字节（通常是 JPEG）。
+
+    ``http_get`` 可注入 ``f(url) -> bytes``，便于离线测试。失败一律抛
+    :class:`SearchError`，GUI 会退回占位图，**不影响搜索结果本身**。
+    """
+    u = str(url or "").strip()
+    if not u:
+        raise SearchError("缩略图 URL 为空")
+    getter = http_get or (lambda link: _http_get_bytes(link, timeout))
+    try:
+        data = getter(u)
+    except SearchError:
+        raise
+    except Exception as e:
+        raise SearchError("下载缩略图失败：%s" % e)
+    if not isinstance(data, (bytes, bytearray)):
+        raise SearchError("缩略图返回了非字节数据")
+    return bytes(data)

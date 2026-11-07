@@ -6,6 +6,40 @@
 打包时本文件会被复制到 `_internal/CHANGELOG.md`，「关于」面板离线读取它，
 因此日志正文必须是纯文本 Markdown，不要写图片或外链依赖。
 
+## [1.2.4] - 2026-11-07
+
+模型搜索结果加上图片预览：每行显示缩略图，选中一条可在右侧查看大图与完整信息，零新增打包依赖。
+
+### 界面
+
+- 结果表新增「预览」列，每行显示 64×36 缩略图；行高调到 46px，用独立的
+  `Preview.Treeview` 样式，不影响「关于 / 诊断」面板里的表格。
+- 结果表右侧新增预览面板：选中一条后显示 192×108 大图、模型名称、作者、
+  面数、许可与「可下载 / 仅浏览」状态；多选时标出已选数量。
+- 没有缩略图或加载失败时显示深色「图片位」占位图，不会出现空白或破图。
+
+### 图片管线
+
+- 搜索结果本来就带官方 CDN 的缩略图 URL，v1.2.0 只存没用；v1.2.4 新增
+  `sketchfab_search.fetch_thumbnail()`，走标准库 HTTPS 默认证书校验，
+  8 秒超时、2 MiB 体积上限，网络层可注入便于离线测试。
+- Tk 8.6 的 `PhotoImage` 只认 PNG/GIF/PPM，而官方缩略图是 JPEG。新增
+  `app/image_codec.py`，用 ctypes 调 Windows 自带的 GDI+ 把 JPEG 转成 PNG：
+  **不引入 Pillow、发布包体积不变**，也不动既有构建门禁。
+- 转码前先做格式守卫（JPEG 魔数 + 结尾 EOI）：被网络截断的畸形数据会让
+  GDI+ 抛 Windows 结构化异常，Python 层接不住，必须在进 GDI+ 之前挡掉。
+- 缩略图在 4 线程后台并发下载，结果按 URL 缓存，翻页回来不重复下载；
+  工作线程只做网络 + 转码，图片经主线程队列回填（Tk 不是线程安全的）；
+  用 `search_gen` 丢弃过期请求，连续搜索 / 翻页不会串图。
+- 所有 `PhotoImage` 显式绑定 master，避免同进程多个 Tk 实例时图片建到
+  别的解释器里导致 `image "pyimageN" doesn't exist`。
+
+### 工程
+
+- 两个 PyInstaller spec 的 `hiddenimports` 加入 `image_codec`。
+- 新增 `tests/test_image_codec.py`、`tests/test_thumbnails.py`；全量 pytest
+  `118 passed, 1 skipped`，`--selftest` 通过，GUI 离线冒烟与真实缩略图截图验收通过。
+
 ## [1.2.3] - 2026-11-07
 
 把深色底整体提亮一档，仍是暗房工作台风格，面板层次与文字对比度保持不变。
