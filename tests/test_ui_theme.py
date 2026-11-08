@@ -104,6 +104,29 @@ def test_donate_entry_is_prominent_in_topbar():
     assert '"Donate.TButton"' in theme_src
 
 
+def test_convert_entry_is_prominent_and_independent():
+    """v1.2.7：GLB→打印导出不能再是工具栏里最弱的文字按钮。"""
+    src = (ROOT / "app" / "sketchfab_gui.py").read_text(encoding="utf-8")
+    theme_src = (ROOT / "app" / "ui_theme.py").read_text(encoding="utf-8")
+    assert '"Convert.TButton"' in theme_src
+    assert 'style="Convert.TButton"' in src
+    assert "3D 打印导出" in src
+    assert "已有 .glb？转成 STL / 3MF" in src
+    assert "self.print_btn = ttk.Button(" in src
+    assert "GLB → STL / 3MF…" in src
+    assert "CONVERT_BTN_TEXT" in src, "按钮文案没有单一真源"
+    # 独立分区：琥珀描边框 + 独占一行，不再塞在 bar 工具栏里
+    assert "convert_bar = tk.Frame(" in src
+    assert "highlightbackground=theme.ACCENT" in src
+    assert 'convert_bar.pack(fill="x"' in src
+    # 次级强调文字在面板底色上要够清楚；hover 填充后仍要够清楚
+    assert _contrast(theme.ACCENT, theme.SURFACE) >= 4.5
+    assert _contrast(theme.ON_ACCENT, theme.ACCENT) >= 4.5
+    # 主按钮层级不被抢：Convert 是描边，实心琥珀仍只给 Accent / Donate
+    assert '"Accent.TButton"' in theme_src
+    assert '"Donate.TButton"' in theme_src
+
+
 def test_apply_styles_and_hide_tabs_on_real_tk():
     pytest.importorskip("tkinter")
     import tkinter as tk
@@ -119,6 +142,9 @@ def test_apply_styles_and_hide_tabs_on_real_tk():
         assert style.lookup("Accent.TButton", "background") == theme.ACCENT
         assert style.lookup("Donate.TButton", "background") == theme.ACCENT
         assert style.lookup("Donate.TButton", "foreground") == theme.ON_ACCENT
+        # v1.2.7：描边次级强调按钮必须在真实 Tk 里真的落地
+        assert style.lookup("Convert.TButton", "background") == theme.SURFACE
+        assert style.lookup("Convert.TButton", "foreground") == theme.ACCENT
         assert style.lookup("TFrame", "background") == theme.BG
         assert style.lookup("Treeview", "background") == theme.SURFACE
         assert theme.hide_native_notebook_tabs(style) is True

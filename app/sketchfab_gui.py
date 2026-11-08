@@ -35,6 +35,11 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+# v1.2.7：转换按钮文案单一真源。按钮初始态与「转换完成」恢复态必须
+# 引用同一个常量，避免点过一次之后入口文案悄悄退回弱简写。
+CONVERT_BTN_TEXT = "◆ 3D 打印：GLB → STL / 3MF…"
+CONVERT_BTN_BUSY = "转换中…"
+
 # ---------------- 路径 ----------------
 FROZEN = bool(getattr(sys, "frozen", False))
 if FROZEN:
@@ -423,7 +428,9 @@ class App:
         self.update_result = None
 
         root.title("Sketchfab 模型下载器 v" + __version__)
-        root.geometry("960x860")
+        # v1.2.7：下载页多了一行「3D 打印导出」分区，默认高度 +60px，
+        # 保证 CONSOLE 日志区不被挤成一条（转换日志有好几行要看）。
+        root.geometry("960x920")
         root.minsize(880, 740)
         root.configure(bg=BG)
         try:
@@ -567,11 +574,6 @@ class App:
         self.open_btn = ttk.Button(bar, text="打开输出目录", command=self.open_out,
                                    state="disabled")
         self.open_btn.pack(side="left", padx=10)
-        # v1.2.5：手动把任意 .glb 转成打印文件；不接下载流程、不自动导出。
-        self.print_btn = ttk.Button(
-            bar, text="GLB → STL / 3MF…", style="Quiet.TButton",
-            command=self.convert_clicked)
-        self.print_btn.pack(side="left")
         ttk.Button(bar, text="清空日志", style="Quiet.TButton",
                    command=self.clear_log).pack(side="right")
         ttk.Button(bar, text="清空链接", style="Quiet.TButton",
@@ -580,6 +582,26 @@ class App:
                                     command=self.show_about)
         self.about_btn.pack(side="right", padx=6)
         # 打赏入口已移到顶栏最右侧（v1.2.2），这里不再放弱样式文字按钮
+
+        # v1.2.7：转换入口从工具栏里最弱的文字按钮升级为独立的
+        # 「3D 打印导出」操作条。独占一行 + 琥珀描边，避免淹没在右侧
+        # 一堆辅助按钮里；仍然只有一个按钮、不接下载流程、不自动导出
+        # （v1.2.5 的约定不变）。
+        convert_bar = tk.Frame(tab_dl, bg=theme.SURFACE, highlightthickness=1,
+                               highlightbackground=theme.ACCENT)
+        convert_bar.pack(fill="x", padx=26, pady=(10, 0))
+        cinner = ttk.Frame(convert_bar, style="Card.TFrame")
+        cinner.pack(fill="x", padx=12, pady=7)
+        cleft = ttk.Frame(cinner, style="Card.TFrame")
+        cleft.pack(side="left", fill="x", expand=True)
+        ttk.Label(cleft, text="3D 打印导出", style="Card.TLabel",
+                  font=theme.display(10, "bold")).pack(anchor="w")
+        ttk.Label(cleft, text="已有 .glb？转成 STL / 3MF，可直接导入切片软件打印",
+                  style="CardMuted.TLabel").pack(anchor="w", pady=(1, 0))
+        self.print_btn = ttk.Button(
+            cinner, text=CONVERT_BTN_TEXT, style="Convert.TButton",
+            command=self.convert_clicked)
+        self.print_btn.pack(side="right", padx=(14, 0))
 
         progwrap = ttk.Frame(tab_dl, style="TFrame")
         progwrap.pack(fill="x", padx=26, pady=(12, 0))
@@ -1069,7 +1091,7 @@ class App:
         if not path:
             return
         self._converting = True
-        self.print_btn.configure(state="disabled", text="转换中…")
+        self.print_btn.configure(state="disabled", text=CONVERT_BTN_BUSY)
         self.logline("")
         self.logline("─" * 66, theme.LINE)
         self.logline("GLB → 打印文件：%s" % path)
@@ -1678,7 +1700,7 @@ class App:
                     ok, msg = payload
                     self._converting = False
                     self.print_btn.configure(state="normal",
-                                             text="GLB → STL / 3MF…")
+                                             text=CONVERT_BTN_TEXT)
                     self.logline(msg, OK if ok else ERR)
                     self.set_status(msg, "ok" if ok else "err")
                 elif kind == "batch_done":

@@ -195,6 +195,21 @@ def apply(root, style) -> dict:
          foreground=[("disabled", DIM)],
          bordercolor=[("active", ACCENT_HI)])
 
+    # v1.2.7：3D 打印导出入口——次级强调按钮。
+    # 琥珀描边 + 琥珀粗体字，明确区别于「清空日志」那类弱文字按钮；
+    # 保持描边而不是实心，避免和一级主按钮「开始下载」抢层级；
+    # hover / 按下时才填充琥珀，给出清晰的可点击反馈。
+    _configure(style, "Convert.TButton", font=display(10, "bold"),
+               padding=(18, 9), background=SURFACE, foreground=ACCENT,
+               borderwidth=1, relief="solid", bordercolor=ACCENT,
+               lightcolor=ACCENT, darkcolor=ACCENT)
+    _map(style, "Convert.TButton",
+         background=[("active", ACCENT), ("pressed", ACCENT_DK),
+                     ("disabled", SURFACE)],
+         foreground=[("active", ON_ACCENT), ("pressed", ON_ACCENT),
+                     ("disabled", DIM)],
+         bordercolor=[("active", ACCENT_HI), ("disabled", LINE)])
+
     _configure(style, "Quiet.TButton", font=body(9), padding=(10, 6),
                background=BG, foreground=MUTED, borderwidth=0,
                relief="flat", bordercolor=BG)
