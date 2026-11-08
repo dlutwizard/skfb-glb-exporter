@@ -40,6 +40,18 @@ from tkinter import filedialog, messagebox, ttk
 CONVERT_BTN_TEXT = "◆ 3D 打印：GLB → STL / 3MF…"
 CONVERT_BTN_BUSY = "转换中…"
 
+# v1.3.0：3D 预览页签。按钮文案同样提成单一真源，避免解析完成后
+# 入口文案退回旧值（v1.2.7 的教训）。
+PREVIEW_OPEN_BTN_TEXT = "打开文件…"
+PREVIEW_OPEN_BTN_BUSY = "读取中…"
+PREVIEW_FILETYPES = [
+    ("3D 模型", "*.glb *.stl *.3mf"),
+    ("glTF 二进制模型", "*.glb"),
+    ("STL 网格", "*.stl"),
+    ("3MF 模型", "*.3mf"),
+    ("所有文件", "*.*"),
+]
+
 # ---------------- 路径 ----------------
 FROZEN = bool(getattr(sys, "frozen", False))
 if FROZEN:
@@ -58,6 +70,8 @@ if str(_APP_DIR) not in sys.path:
 
 import diagnostics as diag                                     # noqa: E402
 import image_codec                                             # noqa: E402
+import preview3d                                               # noqa: E402
+import preview_view                                            # noqa: E402
 import print_export                                            # noqa: E402
 import sketchfab_search as sfsearch                            # noqa: E402
 import ui_theme as theme                                       # noqa: E402
@@ -412,6 +426,9 @@ class App:
         self.q = queue.Queue()
         self.busy = False
         self._converting = False          # GLB→STL/3MF 后台转换防重入
+        self._preview_loading = False     # v1.3.0：3D 预览后台解析防重入
+        self.preview_path = None
+        self.preview_mesh = None
         self.last_dir = None
         self.total = 0
         self.finished = 0
@@ -443,7 +460,7 @@ class App:
         theme.apply(root, style)
 
         # 状态条放最外层、先 pack（side=bottom 必须先于 expand 的内容区占位），
-        # 两个页签共用一条，不随切换重建。
+        # 三个页签共用一条，不随切换重建。
         statusbar = tk.Frame(root, bg=theme.SURFACE, highlightthickness=0)
         statusbar.pack(fill="x", side="bottom")
         tk.Frame(statusbar, height=1, bg=theme.LINE).pack(fill="x")
@@ -481,7 +498,7 @@ class App:
         self._tabs_frame = tk.Frame(topbar, bg=BG)
         self._tabs_frame.pack(side="right", padx=(0, 16), pady=(10, 0))
         self._tab_widgets = []
-        for i, label in enumerate(("下载", "模型搜索")):
+        for i, label in enumerate(("下载", "模型搜索", "3D 预览")):
             cell = tk.Frame(self._tabs_frame, bg=BG)
             cell.pack(side="left", padx=5)
             lbl = tk.Label(cell, text=label, bg=BG, fg=theme.MUTED,
@@ -494,7 +511,8 @@ class App:
             self._tab_widgets.append((cell, lbl, line))
         theme.rule(root).pack(fill="x")
 
-        # v1.2.0 起两个页签；v1.2.1 把原生 tab 栏换成自绘栏，样式更统一。
+        # v1.2.0 起两个页签，v1.3.0 增加「3D 预览」变成三个；
+        # v1.2.1 把原生 tab 栏换成自绘栏，样式更统一。
         self.native_tabs_hidden = theme.hide_native_notebook_tabs(style)
         if not self.native_tabs_hidden:
             self._tabs_frame.pack_forget()      # 降级：仍用系统页签
@@ -502,8 +520,10 @@ class App:
         self.nb.pack(fill="both", expand=True)
         tab_dl = ttk.Frame(self.nb, style="TFrame")
         tab_search = ttk.Frame(self.nb, style="TFrame")
+        tab_preview = ttk.Frame(self.nb, style="TFrame")
         self.nb.add(tab_dl, text="  下载  ")
         self.nb.add(tab_search, text="  模型搜索  ")
+        self.nb.add(tab_preview, text="  3D 预览  ")
         self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         self._paint_tabs(0)
 
@@ -515,7 +535,7 @@ class App:
         ttk.Label(brow, text="01 / DOWNLOAD", style="Eyebrow.TLabel").pack(side="left")
         ttk.Label(brow, text="v" + __version__, style="Ver.TLabel").pack(side="right")
         ttk.Label(head, text="下载模型", style="Title.TLabel").pack(anchor="w", pady=(10, 0))
-        ttk.Label(head, text="批量粘贴链接，导出带材质的 .glb ｜ 切到「模型搜索」可直接搜模型",
+        ttk.Label(head, text="批量粘贴链接，导出带材质的 .glb ｜ 「模型搜索」找模型，「3D 预览」看模型",
                   style="Sub.TLabel").pack(anchor="w", pady=(5, 0))
         theme.rule(tab_dl).pack(fill="x", padx=26, pady=(12, 10))
 
@@ -636,6 +656,10 @@ class App:
         self._init_search_state()
         self._build_search_tab(tab_search)
 
+        # ---------------- 3D 预览页签（v1.3.0） ----------------
+        self._init_preview_state()
+        self._build_preview_tab(tab_preview)
+
         # 按配置决定引擎走哪条解密后端（legacy = 把 RES 从 PATH 剔除）
         self.decrypt_mode = self.apply_node_visibility(self.cfg.get("decrypt_backend"))
 
@@ -676,6 +700,234 @@ class App:
                                           fill=colors.get(tone, theme.OK))
         except Exception:
             pass
+
+    # ---------------- 3D 预览（v1.3.0） ----------------
+    def _init_preview_state(self):
+        """预览页的可变状态；控件引用在 _build_preview_tab 里补齐。"""
+        self.preview_info_labels = {}
+        self.preview_notes_label = None
+        self.preview_spin_var = None
+        self.preview_wire_var = None
+        self.preview_grid_var = None
+        self.preview_axes_var = None
+        self.preview_cull_var = None
+
+    def _build_preview_tab(self, parent):
+        """3D 预览页：本地打开 .glb / .stl / .3mf，纯标准库软件渲染。"""
+        head = ttk.Frame(parent, style="TFrame")
+        head.pack(fill="x", padx=26, pady=(16, 0))
+        ttk.Label(head, text="03 / INSPECT", style="Eyebrow.TLabel").pack(anchor="w")
+        ttk.Label(head, text="3D 预览", style="Title.TLabel").pack(
+            anchor="w", pady=(10, 0))
+        ttk.Label(head, text="本地打开 GLB / STL / 3MF，检查模型姿态、颜色与尺寸，不上传任何文件",
+                  style="Sub.TLabel").pack(anchor="w", pady=(5, 0))
+        theme.rule(parent).pack(fill="x", padx=26, pady=(12, 10))
+
+        # 工具栏：主操作 + 显示开关。整块用 SURFACE 底，和 TCheckbutton 样式一致。
+        toolbar = tk.Frame(parent, bg=theme.SURFACE, highlightthickness=1,
+                           highlightbackground=theme.LINE)
+        toolbar.pack(fill="x", padx=26, pady=(0, 10))
+        tinner = ttk.Frame(toolbar, style="Card.TFrame")
+        tinner.pack(fill="x", padx=12, pady=8)
+
+        row1 = ttk.Frame(tinner, style="Card.TFrame")
+        row1.pack(fill="x")
+        self.preview_open_btn = ttk.Button(
+            row1, text=PREVIEW_OPEN_BTN_TEXT, style="Accent.TButton",
+            command=self._preview_open)
+        self.preview_open_btn.pack(side="left")
+        self.preview_recent_btn = ttk.Button(
+            row1, text="预览输出目录最新模型", command=self._preview_recent)
+        self.preview_recent_btn.pack(side="left", padx=(10, 0))
+        ttk.Button(row1, text="适配窗口 Fit", command=self._preview_fit).pack(
+            side="left", padx=(10, 0))
+        self.preview_file_lbl = tk.Label(
+            row1, text="尚未打开文件", bg=theme.SURFACE, fg=theme.MUTED,
+            font=theme.mono(9), anchor="e")
+        self.preview_file_lbl.pack(side="right")
+
+        tk.Frame(tinner, height=1, bg=theme.LINE).pack(fill="x", pady=7)
+        row2 = ttk.Frame(tinner, style="Card.TFrame")
+        row2.pack(fill="x")
+
+        self.preview_spin_var = tk.BooleanVar(value=False)
+        self.preview_wire_var = tk.BooleanVar(value=False)
+        self.preview_grid_var = tk.BooleanVar(value=True)
+        self.preview_axes_var = tk.BooleanVar(value=True)
+        self.preview_cull_var = tk.BooleanVar(value=False)
+        # 注意：这里只传 setter 的名字，点击时才去取 self.preview_view，
+        # 因为视口控件要到下面才创建。
+        switches = (
+            ("自动旋转", self.preview_spin_var, "spin"),
+            ("线框", self.preview_wire_var, "wire"),
+            ("网格", self.preview_grid_var, "grid"),
+            ("坐标轴", self.preview_axes_var, "axes"),
+            ("背面剔除", self.preview_cull_var, "cull"),
+        )
+        for label, var, key in switches:
+            ttk.Checkbutton(
+                row2, text=label, variable=var,
+                command=lambda v=var, k=key: self._preview_toggle(k, v.get())).pack(
+                    side="left", padx=(0, 14))
+        tk.Label(row2, text="左键旋转 · 滚轮缩放 · 右键平移 · 双击适配",
+                 bg=theme.SURFACE, fg=theme.DIM, font=theme.body(9)).pack(side="right")
+
+        # 主区：先 pack 右侧信息栏，再让左侧视口吃满剩余空间。
+        main = tk.Frame(parent, bg=BG)
+        main.pack(fill="both", expand=True, padx=26, pady=(0, 8))
+        info = tk.Frame(main, bg=theme.SURFACE, highlightthickness=1,
+                        highlightbackground=theme.LINE, width=236)
+        info.pack(side="right", fill="y", padx=(10, 0))
+        info.pack_propagate(False)
+        tk.Label(info, text="MODEL / 模型信息", bg=theme.SURFACE, fg=theme.MUTED,
+                 font=theme.mono(9, "bold"), anchor="w").pack(
+                     anchor="w", padx=14, pady=(14, 10))
+        fields = (("name", "文件名"), ("fmt", "格式"), ("faces", "三角形"),
+                  ("verts", "顶点"), ("size", "尺寸"), ("volume", "体积"),
+                  ("colors", "颜色"))
+        for key, label in fields:
+            cell = tk.Frame(info, bg=theme.SURFACE)
+            cell.pack(fill="x", padx=14, pady=3)
+            tk.Label(cell, text=label, bg=theme.SURFACE, fg=theme.MUTED,
+                     font=theme.body(9), width=6, anchor="w").pack(side="left")
+            val = tk.Label(cell, text="—", bg=theme.SURFACE, fg=theme.TEXT,
+                           font=theme.mono(9), anchor="w", justify="left",
+                           wraplength=140)
+            val.pack(side="left", fill="x", expand=True)
+            self.preview_info_labels[key] = val
+        tk.Frame(info, height=1, bg=theme.LINE).pack(fill="x", padx=14, pady=12)
+        tk.Label(info, text="NOTES / 说明", bg=theme.SURFACE, fg=theme.MUTED,
+                 font=theme.mono(9, "bold"), anchor="w").pack(anchor="w", padx=14)
+        self.preview_notes_label = tk.Label(
+            info, text="打开一个模型后，这里会显示解析说明。",
+            bg=theme.SURFACE, fg=theme.MUTED, font=theme.body(9),
+            wraplength=206, justify="left", anchor="nw")
+        self.preview_notes_label.pack(fill="x", padx=14, pady=(8, 0))
+
+        self.preview_view = preview_view.PreviewView(main)
+        self.preview_view.pack(side="left", fill="both", expand=True)
+
+        ttk.Label(parent,
+                  text="支持 .glb / .stl / .3mf ｜ 全部在本地解析与渲染，不上传文件",
+                  style="Sub.TLabel").pack(fill="x", padx=26, pady=(0, 12))
+
+    def _preview_fit(self):
+        self.preview_view.fit()
+
+    def _preview_toggle(self, key, on):
+        fn = {"spin": self.preview_view.set_spin,
+              "wire": self.preview_view.set_wireframe,
+              "grid": self.preview_view.set_grid,
+              "axes": self.preview_view.set_axes,
+              "cull": self.preview_view.set_backface_cull}[key]
+        fn(bool(on))
+
+    def _preview_open(self):
+        """选一个硬盘上任意 3D 文件；解析放后台线程，结果走队列回主线程。"""
+        if self._preview_loading:
+            return
+        initial = self.out_var.get() or default_out_dir()
+        path = filedialog.askopenfilename(
+            title="选择要预览的 3D 模型",
+            filetypes=PREVIEW_FILETYPES,
+            initialdir=initial if Path(initial).exists() else None)
+        if not path:
+            return
+        self._preview_load(Path(path))
+
+    def _preview_recent(self):
+        """一键预览输出目录里最近生成的模型（下载器把 .glb 放在模型子目录）。"""
+        if self._preview_loading:
+            return
+        folder = Path(self.last_dir or self.out_var.get() or default_out_dir())
+        found = []
+        if folder.is_dir():
+            for pat in ("*.glb", "*.stl", "*.3mf"):
+                found.extend(folder.glob(pat))
+                found.extend(folder.glob("*/" + pat))
+        if not found:
+            messagebox.showinfo(
+                "3D 预览",
+                "输出目录里还没有 .glb / .stl / .3mf。\n%s\n"
+                "可以先下载模型，或点「打开文件…」手动选择。" % folder)
+            return
+        try:
+            newest = max(found, key=lambda p: p.stat().st_mtime)
+        except OSError:
+            return
+        self._preview_load(newest)
+
+    def _preview_load(self, path):
+        """后台线程解析，绝不卡住 Tk 主循环。"""
+        if self._preview_loading:
+            return
+        self._preview_loading = True
+        self.preview_path = path
+        self.preview_open_btn.configure(state="disabled",
+                                        text=PREVIEW_OPEN_BTN_BUSY)
+        self.preview_recent_btn.configure(state="disabled")
+        self.preview_file_lbl.configure(text=path.name, fg=theme.MUTED)
+        self.preview_view.show_message("正在解析 %s…" % path.name)
+        self.set_status("正在解析 3D 模型：%s" % path.name, "busy")
+        threading.Thread(target=self._preview_worker, args=(path,),
+                         daemon=True, name="sfd-preview").start()
+
+    def _preview_worker(self, path):
+        try:
+            mesh = preview3d.load_mesh(path)
+        except preview3d.Preview3DError as e:
+            self.q.put(("preview_error", str(e)))
+        except Exception as e:                        # 不让后台线程静默死掉
+            self.q.put(("preview_error", "未预期的错误：%s: %s"
+                        % (type(e).__name__, e)))
+        else:
+            self.q.put(("preview_ready", mesh))
+
+    def _apply_preview(self, mesh):
+        self._preview_loading = False
+        self.preview_mesh = mesh
+        self.preview_view.set_mesh(mesh)
+        self.preview_open_btn.configure(state="normal",
+                                        text=PREVIEW_OPEN_BTN_TEXT)
+        self.preview_recent_btn.configure(state="normal")
+        self.preview_file_lbl.configure(text=mesh.name, fg=theme.TEXT)
+        self._render_preview_info(mesh)
+        self.set_status("3D 预览：%s · %s · %d 个三角形"
+                        % (mesh.name, mesh.fmt, mesh.triangle_count), "ok")
+
+    def _show_preview_error(self, message):
+        self._preview_loading = False
+        self.preview_mesh = None
+        self.preview_view.show_error(message)
+        self.preview_open_btn.configure(state="normal",
+                                        text=PREVIEW_OPEN_BTN_TEXT)
+        self.preview_recent_btn.configure(state="normal")
+        self.preview_file_lbl.configure(text="打开失败", fg=theme.ERR)
+        self._render_preview_info(None)
+        self.set_status("3D 预览失败：%s" % message, "err")
+
+    def _render_preview_info(self, mesh):
+        if mesh is None:
+            values = dict.fromkeys(("name", "fmt", "faces", "verts", "size",
+                                    "volume", "colors"), "—")
+            notes = "打开一个模型后，这里会显示解析说明。"
+        else:
+            values = {
+                "name": mesh.name,
+                "fmt": mesh.fmt,
+                "faces": ("%d / %d（已抽样）" % (mesh.triangle_count,
+                                                mesh.original_faces)
+                          if mesh.simplified else str(mesh.triangle_count)),
+                "verts": str(len(mesh.vertices)),
+                "size": "%.1f × %.1f × %.1f mm" % mesh.size_mm,
+                "volume": ("%.2f cm³" % (mesh.volume_mm3 / 1000.0)
+                           if mesh.volume_mm3 > 0 else "—"),
+                "colors": "%d 种" % len(set(mesh.face_colors)),
+            }
+            notes = "\n".join("· " + n for n in mesh.notes) or "无"
+        for key, val in values.items():
+            self.preview_info_labels[key].configure(text=val)
+        self.preview_notes_label.configure(text=notes)
 
     # ---------------- 模型搜索（v1.2.0） ----------------
     def _init_search_state(self):
@@ -1703,6 +1955,10 @@ class App:
                                              text=CONVERT_BTN_TEXT)
                     self.logline(msg, OK if ok else ERR)
                     self.set_status(msg, "ok" if ok else "err")
+                elif kind == "preview_ready":
+                    self._apply_preview(payload)
+                elif kind == "preview_error":
+                    self._show_preview_error(payload)
                 elif kind == "batch_done":
                     self.finish()
         except queue.Empty:

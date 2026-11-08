@@ -6,6 +6,37 @@
 打包时本文件会被复制到 `_internal/CHANGELOG.md`，「关于」面板离线读取它，
 因此日志正文必须是纯文本 Markdown，不要写图片或外链依赖。
 
+## [1.3.0] - 2026-11-08
+
+新增「3D 预览」页签：本地打开 GLB / STL / 3MF，纯标准库软件渲染，可旋转、缩放、平移并检查颜色与尺寸。
+
+### 新功能
+
+- 新增第三个页签「3D 预览」：打开文件 / 一键预览输出目录最新模型 / 适配窗口，
+  右侧信息栏显示格式、三角形数、顶点数、毫米尺寸、体积、颜色种数与解析说明。
+- 交互对齐在线 3D 查看器：左键旋转、滚轮缩放、右键或中键平移、双击 Fit，
+  以及自动旋转、线框、网格、坐标轴、背面剔除开关。
+- 支持三种格式：GLB 复用 `print_export` 的 Z-up 摆正与米→毫米换算；STL 兼容
+  二进制与 ASCII；3MF 解析 OPC/XML、basematerials / colorgroup 颜色、
+  `<build><item transform>` 与 `<components>` 装配层级。
+- 渲染为画家算法 + 面法线 Lambert 明暗，每三角形保留颜色；超过 9000 面均匀抽样，
+  拖拽 / 自动旋转时降到 1800 面，保证交互不卡。弱透视避免模型被拉变形。
+
+### 工程
+
+- 新增 `app/preview3d.py`（解析 + 渲染数学，**刻意不 import tkinter**，干净环境可跑）
+  与 `app/preview_view.py`（Tk Canvas 控件与交互），零新增依赖、完全离线。
+- 解析放后台线程，结果经 `preview_ready` / `preview_error` 队列回主线程，
+  不阻塞 Tk 主循环；按钮文案提成 `PREVIEW_OPEN_BTN_TEXT` 单一真源。
+- 两个 PyInstaller spec 补 `preview3d` / `preview_view` hiddenimports。
+
+### 测试
+
+- 新增 `tests/test_preview3d.py`：22 条用例覆盖三种格式、颜色 / 装配 / 元数据、
+  降采样、投影与深度排序、错误路径、弱透视守卫、GUI 与 spec 接线，以及真实 Tk 渲染。
+- 全量 pytest 175 passed, 2 skipped；真实 Tk 集成验收通过（三页签、双色 3MF、
+  线框、STL、错误态、搜索页未受影响）。
+
 ## [1.2.7] - 2026-11-07
 
 把「GLB → 3D 打印」入口从工具栏里最不显眼的文字按钮，升级成下载页独占一行的琥珀描边操作区。
