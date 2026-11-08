@@ -7,7 +7,8 @@ preview_view.py — 3D 预览的 tkinter Canvas 控件（软件渲染，零新�
   工具栏开关：自动旋转 / 线框 / 网格 / 坐标轴（由 GUI 调 set_*）
 
 渲染用画家算法：三角形按相机空间深度排序后逐个 create_polygon，
-面法线做 Lambert 明暗；超大网格在拖拽 / 自动旋转时自动降质，保证交互不卡。
+面法线做 Lambert 明暗；超大网格在拖拽 / 自动旋转时用**顶点聚类聚合**
+降质（保留完整表面，只降精度），保证交互不卡且形状不残缺。
 """
 from __future__ import annotations
 
@@ -43,20 +44,28 @@ class PreviewView(tk.Frame):
         self._pending = False
         self._pending_interactive = False
         self._spin_job = None
+        # 拖拽态复用上一帧面顺序的缓存：(subset 面数, [face_index, ...])
+        self._sort_cache = None
         self._bind_events()
 
     # ------------------------------------------------------------ 对外 API
+    def _invalidate_order(self):
+        """清掉「复用上一帧面顺序」的缓存（换模型 / 改剔除 / 切线框时调用）。"""
+        self._sort_cache = None
+
     def set_mesh(self, mesh):
         self.mesh = mesh
         self.error_text = None
         self.message_text = None
         self.cam = p3.fit_camera(self.cam)
+        self._invalidate_order()
         self.render()
 
     def show_error(self, message):
         self.error_text = message
         self.message_text = None
         self.mesh = None
+        self._invalidate_order()
         self.render()
 
     def show_message(self, message):
@@ -64,14 +73,17 @@ class PreviewView(tk.Frame):
         self.error_text = None
         self.message_text = message
         self.mesh = None
+        self._invalidate_order()
         self.render()
 
     def fit(self):
         self.cam = p3.fit_camera(self.cam)
+        self._invalidate_order()      # 视角复位后前后顺序全变了
         self.render()
 
     def set_wireframe(self, on):
         self.cam.wireframe = bool(on)
+        self._invalidate_order()      # 实体渲染与线框渲染顺序语义不同
         self.render()
 
     def set_grid(self, on):
@@ -84,6 +96,7 @@ class PreviewView(tk.Frame):
 
     def set_backface_cull(self, on):
         self.cam.backface_cull = bool(on)
+        self._invalidate_order()      # 剔除会改变可见面集合
         self.render()
 
     def set_spin(self, on):
@@ -190,9 +203,15 @@ class PreviewView(tk.Frame):
             self._draw_empty(w, h)
             return
 
-        limit = p3.DRAG_RENDER_FACES if interactive else p3.MAX_RENDER_FACES
+        # 交互态（拖拽 / 自动旋转）只降低目标面数，不换算法：``subset`` 内部
+        # 走 preview3d._simplify 的顶点聚类聚合，表面始终完整，只是精度变粗。
+        # 绝不能退回「取前 N 个面」——那会把模型切成半个，正是 v1.3.0 的 Bug。
         if self.cam.wireframe:
-            limit = min(limit, 4000)      # 线框下每条边都是独立 item
+            limit = p3.WIREFRAME_FACES   # 线框下每条边都是独立 item
+        elif interactive:
+            limit = p3.DRAG_RENDER_FACES
+        else:
+            limit = p3.MAX_RENDER_FACES
         mesh = self.mesh.subset(limit)
         cam = self.cam
         cpts = p3.camera_points(mesh.vertices, cam, mesh.center)
@@ -203,13 +222,32 @@ class PreviewView(tk.Frame):
         if cam.wireframe:
             self._draw_wireframe(mesh, spts)
         else:
-            self._draw_faces(mesh, cpts, spts, w, h)
+            self._draw_faces(mesh, cpts, spts, w, h, interactive=interactive)
         if cam.axes:
             self._draw_axes(mesh, w, h)
 
-    def _draw_faces(self, mesh, cpts, spts, w, h):
+    def _draw_faces(self, mesh, cpts, spts, w, h, interactive=False):
         c = self.canvas
-        for _z, fi, n in p3.sort_faces(cpts, mesh.faces, self.cam.backface_cull):
+        # v1.3.1 性能优化（一）：拖拽态复用上一帧的绘制顺序，只对本帧重算
+        # 法线与深度（画家算法语义不变，只是省掉 O(n log n) 的 list.sort）。
+        # 相机角度在小幅拖动时变化很小，面的前后顺序基本不变，视觉无差别；
+        # 松手后会立刻做一次精确排序重绘（见 render() 的 interactive=False）。
+        #
+        # 实测收益（4800 面）：全量 sort_faces 0.0035 s → 复用只算法线
+        # 0.0029 s，省 17%。绝对值不大 —— 拖拽帧的大头是 Tk 的
+        # create_polygon + 光栅化（约 0.13 s），排序只占 2%。这一层是
+        # 顺手拿的，不要指望它救帧率；真正决定帧率的是 DRAG_RENDER_FACES。
+        order = None
+        if interactive:
+            cached = self._sort_cache
+            if cached is not None and cached[0] == len(mesh.faces):
+                order = self._replay_order(cached[1], cpts, mesh.faces)
+        if order is None:
+            order = p3.sort_faces(cpts, mesh.faces, self.cam.backface_cull)
+            self._sort_cache = (len(mesh.faces),
+                                [fi for _z, fi, _n in order])
+        create = c.create_polygon
+        for _z, fi, n in order:
             f = mesh.faces[fi]
             p0, p1, p2 = spts[f[0]], spts[f[1]], spts[f[2]]
             xs = (p0[0], p1[0], p2[0])
@@ -217,9 +255,22 @@ class PreviewView(tk.Frame):
             if max(xs) < 0 or min(xs) > w or max(ys) < 0 or min(ys) > h:
                 continue                       # 整面在屏幕外，跳过
             col = p3.hex_color(p3.shade(n, mesh.face_colors[fi]))
-            # outline 用同色补上相邻三角形之间的 1px 缝（Tk 无抗锯齿）
-            c.create_polygon(p0[0], p0[1], p1[0], p1[1], p2[0], p2[1],
-                             fill=col, outline=col, width=1)
+            # v1.3.1 性能优化（二）：去掉 `outline=col, width=1`。
+            # Tk 画 polygon 的 outline 要额外描三条边，代价极大：同是可见
+            # 窗口 900x600，fill-only 比 fill+outline 快 **4~4.5 倍**
+            #   n=6000  0.117 s vs 0.388 s     n=12000 0.240 s vs 0.941 s
+            #   n=20000 0.411 s vs 1.536 s     n=30000 0.628 s vs 2.075 s
+            # 而相邻三角形共享顶点时，Tk 的填充本身就是无缝拼接的——已用
+            # 5 倍放大的实机截图逐像素确认（20 万面球 + 立方体各一张），
+            # 表面完全连续、无网状白缝，被切段的行数为 0。所以不加
+            # seam_fill 开关垫底，保持简单。
+            create(p0[0], p0[1], p1[0], p1[1], p2[0], p2[1],
+                   fill=col, outline="", width=0)
+
+    def _replay_order(self, face_ids, cpts, faces):
+        """按上一帧的面顺序重算 (z, fi, normal)，省掉排序但保留剔除语义。"""
+        return p3.face_depth_normal(cpts, faces, face_ids,
+                                    self.cam.backface_cull)
 
     def _draw_wireframe(self, mesh, spts):
         c = self.canvas

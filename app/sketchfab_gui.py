@@ -915,8 +915,8 @@ class App:
             values = {
                 "name": mesh.name,
                 "fmt": mesh.fmt,
-                "faces": ("%d / %d（已抽样）" % (mesh.triangle_count,
-                                                mesh.original_faces)
+                "faces": ("%d / %d（已合并显示）" % (mesh.triangle_count,
+                                                    mesh.original_faces)
                           if mesh.simplified else str(mesh.triangle_count)),
                 "verts": str(len(mesh.vertices)),
                 "size": "%.1f × %.1f × %.1f mm" % mesh.size_mm,
