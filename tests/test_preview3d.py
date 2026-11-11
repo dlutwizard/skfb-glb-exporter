@@ -351,34 +351,37 @@ def test_fit_camera_resets_view_but_keeps_display_flags():
 
 
 # ---------------------------------------------------------------- 接线守卫
-def test_gui_wires_preview_tab_and_queue():
+def test_gui_wires_webgl_preview_tab():
     src = (ROOT / "app" / "sketchfab_gui.py").read_text(encoding="utf-8")
     assert 'enumerate(("下载", "模型搜索", "3D 预览"))' in src
     assert "tab_preview = ttk.Frame(" in src
     assert 'self.nb.add(tab_preview, text="  3D 预览  ")' in src
     assert "def _build_preview_tab(" in src
     assert "def _init_preview_state(" in src
-    assert "preview_view.PreviewView(main)" in src
-    assert "def _preview_worker(" in src
-    assert "threading.Thread(target=self._preview_worker" in src
-    assert '("preview_ready", mesh)' in src
-    assert 'kind == "preview_ready"' in src
-    assert 'kind == "preview_error"' in src
+    assert "import preview_web" in src
+    assert "self.preview_launcher = preview_web.WebPreview()" in src
+    assert "def _preview_launch(" in src
+    assert "self.preview_launcher.open(path)" in src
+    assert "preview_view" not in src, "旧 Tk 预览控件仍在 GUI 里"
+    assert "preview3d" not in src, "旧软件渲染解析仍在 GUI 里"
+    assert "def _preview_worker(" not in src
+    assert 'kind == "preview_ready"' not in src
     assert "PREVIEW_FILETYPES" in src
-    # v1.2.7 的教训：按钮文案必须单一真源，恢复态不许硬编码
-    assert src.count("text=PREVIEW_OPEN_BTN_TEXT") == 3
+    # 按钮文案仍必须单一真源，恢复态不许硬编码
+    assert src.count("text=PREVIEW_OPEN_BTN_TEXT") == 2
     assert src.count("text=PREVIEW_OPEN_BTN_BUSY") == 1
-    assert 'text="打开文件…"' not in src, "恢复态硬编码了按钮文案"
+    assert 'text="打开文件…"' not in src, "恢复态硬编码了旧按钮文案"
     # 三个页签，别把搜索页挤掉
     assert 'self.nb.add(tab_dl, text="  下载  ")' in src
     assert 'self.nb.add(tab_search, text="  模型搜索  ")' in src
 
 
-def test_specs_include_preview_hiddenimports():
+def test_specs_include_webgl_preview_hiddenimports():
     for name in ("Sketchfab下载器.spec", "single_file.spec"):
         src = (ROOT / "build" / name).read_text(encoding="utf-8")
-        assert '"preview3d"' in src, "%s 漏了 preview3d" % name
-        assert '"preview_view"' in src, "%s 漏了 preview_view" % name
+        assert '"preview_web"' in src, "%s 漏了 preview_web" % name
+        assert '"preview3d"' not in src
+        assert '"preview_view"' not in src
 
 
 def test_parsing_layer_has_no_gui_dependency():
@@ -396,18 +399,20 @@ def test_parsing_layer_has_no_gui_dependency():
 
 def test_docs_and_version_are_bumped():
     ver = (ROOT / "app" / "version.py").read_text(encoding="utf-8")
-    assert '__version__ = "1.3.1"' in ver
-    assert "VERSION_TUPLE = (1, 3, 1)" in ver
+    from version import VERSION_TUPLE, __version__
+    assert '__version__ = "%s"' % __version__ in ver
+    assert "VERSION_TUPLE = %r" % (VERSION_TUPLE,) in ver
     clog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "## [1.3.1]" in clog and "## [1.3.0]" in clog
-    assert "顶点" in clog            # v1.3.1 核心修复：顶点合并
+    assert "## [%s]" % __version__ in clog
+    assert "## [1.3.1]" in clog
+    assert "WebGL" in clog
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "### 3D 预览（v1.3.0 新增，v1.3.1 修订）" in readme
-    assert "preview3d.py" in readme and "preview_view.py" in readme
+    assert "### 3D 预览（v1.4.0：本地 WebGL）" in readme
+    assert "preview_web.py" in readme
     tpl = (ROOT / "app" / "使用说明.template.txt").read_text(encoding="utf-8")
     assert "三个页签" in tpl
-    assert "二之三、3D 文件预览（v1.3.1 修订）" in tpl
-    assert "已合并显示" in tpl and "已抽样" not in tpl
+    assert "二之三、3D 文件预览（v1.4.0：本地 WebGL）" in tpl
+    assert "WebGL" in tpl and "已抽样" not in tpl
 
 
 def test_preview_view_has_neutral_message_state():
@@ -719,7 +724,7 @@ def test_notes_and_gui_avoid_misleading_sampling_wording(tmp_path):
 
     gui = (ROOT / "app" / "sketchfab_gui.py").read_text(encoding="utf-8")
     assert "已抽样" not in gui, "GUI 里还在显示「已抽样」"
-    assert "已合并显示" in gui
+    assert "本地 WebGL" in gui
 
 
 def test_high_poly_mesh_still_renders_faces():

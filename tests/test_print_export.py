@@ -496,18 +496,20 @@ def test_gui_wires_convert_button_and_queue():
     assert "import print_export" in src
     assert "self._converting = False" in src
     assert "self.print_btn = ttk.Button(" in src
-    assert "GLB → STL / 3MF…" in src
+    assert "高级 3D 打印转换" in src
+    assert "import print_advanced" in src
     # v1.2.7：入口升级为独立的醒目分区，不再用 Quiet 弱样式
     assert 'style="Convert.TButton"' in src
     assert "3D 打印导出" in src
     assert "convert_bar = tk.Frame(" in src
     # 文案单一真源：初始态与 print_done 恢复态都引用常量，
     # 防止点过一次转换之后按钮文案悄悄退回弱简写。
-    assert 'CONVERT_BTN_TEXT = "◆ 3D 打印：GLB → STL / 3MF…"' in src
+    assert 'CONVERT_BTN_TEXT = "◆ 高级 3D 打印转换…"' in src
     assert src.count("text=CONVERT_BTN_TEXT") == 2
     assert 'text="GLB → STL / 3MF…"' not in src, "仍有硬编码的旧恢复文案"
     assert "def convert_clicked(self):" in src
-    assert "def _convert_worker(self, glb_path):" in src
+    assert "def _convert_worker(self, src, length, auto_fit, quality):" in src
+    assert "def _convert_basic_worker(self, glb_path):" in src
     assert "sfd-print-export" in src
     assert '("print_log",' in src and '("print_done",' in src
     assert 'elif kind == "print_log":' in src

@@ -111,9 +111,9 @@ def test_convert_entry_is_prominent_and_independent():
     assert '"Convert.TButton"' in theme_src
     assert 'style="Convert.TButton"' in src
     assert "3D 打印导出" in src
-    assert "已有 .glb？转成 STL / 3MF" in src
+    assert "自动合并壳体" in src
     assert "self.print_btn = ttk.Button(" in src
-    assert "GLB → STL / 3MF…" in src
+    assert "高级 3D 打印转换" in src
     assert "CONVERT_BTN_TEXT" in src, "按钮文案没有单一真源"
     # 独立分区：琥珀描边框 + 独占一行，不再塞在 bar 工具栏里
     assert "convert_bar = tk.Frame(" in src

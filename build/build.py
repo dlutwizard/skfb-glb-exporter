@@ -17,7 +17,7 @@
     0  成功
     2  版本号非法 / 回退（不是严格大于账本与 CHANGELOG 里的最高版本）
     3  构建失败（PyInstaller 报错 / 产物缺失）
-    4  体积超预算（onedir > 160 MiB 或 zip > 72 MB）
+    4  体积超预算（onedir > 420 MiB 或 zip > 280 MB）
     5  版本一致性校验失败（exe 属性 / --version 输出与 version.py 不符）
     6  包内出现禁止物（config.json / psutil / 旧手写使用说明）
 """
@@ -51,6 +51,10 @@ WORK_DIR = BUILD / "work_dir"
 ONEFILE_DIST = BUILD / "dist_onefile"
 SPEC_DIR = BUILD / "Sketchfab下载器.spec"
 SPEC_ONE = BUILD / "single_file.spec"
+SPEC_WORKER = BUILD / "advanced_worker.spec"
+ADVANCED_DIST = BUILD / "advanced_dist"
+ADVANCED_WORK = BUILD / "advanced_work"
+WORKER_NAME = "advanced_print_worker"
 LEDGER = BUILD / "sizes.json"
 TEMPLATE = APP / "使用说明.template.txt"
 CHANGELOG = ROOT / "CHANGELOG.md"
@@ -60,11 +64,11 @@ VENV_PY = BUILD / "venv" / "Scripts" / "python.exe"
 ONEDIR_NAME = "Sketchfab下载器"
 EXE_NAME = ONEDIR_NAME + ".exe"
 
-# 体积门禁（M1/M2）。这里的 "MB" 一律按 MiB 计（与 PRD 里 81.5 MB 的口径一致）
-# M2 = **≤72 MB**（v1.1.1 起与 PRD 对齐，实测 70.2 MB 通过）。
-# PRD 里 ≈66 MB 的理想值是 **v1.2 目标**（要摘 Node 才可能达到），不作为 v1.1.x 的闸门。
-ONEDIR_LIMIT = 160 * 1024 * 1024
-ZIP_LIMIT = 72 * 1024 * 1024
+# 体积门禁（M1/M2）。这里的 "MB" 一律按 MiB 计。
+# v1.5.0 起内置高级转换 worker（numpy/scipy/scikit-image/trimesh），
+# 体积预算相应放宽；worker 只在用户点「高级 3D 打印转换」时启动。
+ONEDIR_LIMIT = 420 * 1024 * 1024
+ZIP_LIMIT = 280 * 1024 * 1024
 COMPONENT_WARN = 2 * 1024 * 1024      # R13：单组件相对上一版 +2 MiB 告警
 
 PLACEHOLDERS = ("{{VERSION}}", "{{BUILD_DATE}}", "{{SIZE_ONEDIR_MB}}",
@@ -505,6 +509,41 @@ def run_pyinstaller(version: str, node_exe: Path, single_file: bool = False) -> 
     return out
 
 
+def build_advanced_worker(force: bool = False) -> Path:
+    """构建内置高级转换 worker（onedir），返回 exe 路径。
+
+    依赖已固定在 build/venv：numpy 1.26 / scipy 1.11 / scikit-image 0.22 /
+    trimesh 4.4。发布包把整个目录放进 _internal/advanced/worker/。
+    """
+    exe = ADVANCED_DIST / WORKER_NAME / (WORKER_NAME + ".exe")
+    sources = [SPEC_WORKER, APP / "advanced_print_worker.py"]
+    if (not force and exe.is_file()
+            and all(exe.stat().st_mtime >= s.stat().st_mtime
+                    for s in sources if s.is_file())):
+        log("· 复用已有内置 worker（源码未变）")
+        return exe
+    if not SPEC_WORKER.is_file():
+        raise BuildError("找不到 worker spec：%s" % SPEC_WORKER, 3)
+    cmd_py = [str(VENV_PY), "-m", "PyInstaller"] if VENV_PY.is_file() \
+        else [sys.executable, "-m", "PyInstaller"]
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    cmd = cmd_py + [str(SPEC_WORKER), "--noconfirm",
+                    "--distpath", str(ADVANCED_DIST),
+                    "--workpath", str(ADVANCED_WORK)]
+    log("$ " + " ".join(cmd))
+    started = time.time()
+    proc = subprocess.run(cmd, cwd=str(ROOT), env=env)
+    if proc.returncode != 0:
+        raise BuildError("内置 worker 构建失败（exit %d）" % proc.returncode, 3)
+    if not exe.is_file():
+        raise BuildError("内置 worker 产物缺失：%s" % exe, 3)
+    log("· 内置 worker 用时 %.1f s（%.1f MiB）"
+        % (time.time() - started, mb(dir_bytes(exe.parent))))
+    return exe
+
+
 def _as_text(value) -> str:
     """bytes / str → str（PE 资源里的字符串可能是任一种）。"""
     if isinstance(value, bytes):
@@ -761,11 +800,13 @@ def write_report(version: str, build_date: str, onedir_bytes: int, zip_bytes: in
     lines.append("")
     lines.append("| 项 | 值 | 门禁 | 结果 |")
     lines.append("|---|---|---|---|")
-    lines.append("| onedir 体积 | %.1f MiB（%d B） | ≤ 160 MiB（M1） | %s |" %
+    lines.append("| onedir 体积 | %.1f MiB（%d B） | ≤ %d MiB（M1） | %s |" %
                  (mb(onedir_bytes), onedir_bytes,
+                  ONEDIR_LIMIT // 1024 // 1024,
                   "PASS" if onedir_bytes <= ONEDIR_LIMIT else "FAIL"))
-    lines.append("| zip 体积 | %.1f MB（%d B） | ≤ 72 MB（M2） | %s |" %
-                 (mb(zip_bytes), zip_bytes, "PASS" if zip_bytes <= ZIP_LIMIT else "FAIL"))
+    lines.append("| zip 体积 | %.1f MB（%d B） | ≤ %d MB（M2） | %s |" %
+                 (mb(zip_bytes), zip_bytes, ZIP_LIMIT // 1024 // 1024,
+                  "PASS" if zip_bytes <= ZIP_LIMIT else "FAIL"))
     lines.append("| 启动耗时（--selftest 中位） | %.2f s | ≤ 1.7 s（M3） | %s |" %
                  (probe["startup_median"],
                   "PASS" if probe["startup_median"] <= 1.7 else "WARN"))
@@ -944,6 +985,15 @@ def run(args: argparse.Namespace) -> int:
     onedir = run_pyinstaller(version, node_exe)
     log("· 产物目录：%s（%.1f MiB）" % (onedir, mb(dir_bytes(onedir))))
     exe = onedir / EXE_NAME
+
+    step("3.5/9 构建内置高级转换 worker")
+    worker_exe = build_advanced_worker()
+    worker_dest = onedir / "_internal" / "advanced" / "worker"
+    if worker_dest.exists():
+        shutil.rmtree(worker_dest)
+    shutil.copytree(worker_exe.parent, worker_dest)
+    log("· 已内置 worker：%s（%.1f MiB）"
+        % (worker_dest, mb(dir_bytes(worker_dest))))
 
     step("4/9 版本一致性（pefile 读 exe 属性）")
     file_ver = read_exe_version(exe)

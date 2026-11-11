@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>本地 WebGL 预览 · Sketchfab下载器</title>
+  <link rel="stylesheet" href="/assets/webgl/viewer.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/assets/webgl/three.module.js",
+      "three/addons/": "/assets/webgl/addons/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="stage"></div>
+
+  <header class="topbar glass">
+    <div class="brand">
+      <span class="eyebrow">SFD / LOCAL WEBGL</span>
+      <strong id="model-name">正在加载模型…</strong>
+    </div>
+    <div class="actions">
+      <button id="btn-fit" type="button" title="适配窗口 (F)">Fit</button>
+      <button id="btn-wire" type="button" title="线框 (W)">线框</button>
+      <button id="btn-grid" type="button" class="on" title="网格 (G)">网格</button>
+      <button id="btn-spin" type="button" title="自动旋转 (R)">自动旋转</button>
+      <button id="btn-axes" type="button" title="坐标轴 (A)">坐标轴</button>
+    </div>
+  </header>
+
+  <aside class="stats glass">
+    <div><span>三角形</span><b id="stat-tris">—</b></div>
+    <div><span>顶点</span><b id="stat-verts">—</b></div>
+    <div><span>尺寸</span><b id="stat-size">—</b></div>
+    <div><span>格式</span><b id="stat-format">—</b></div>
+  </aside>
+
+  <div class="hint glass">左键旋转 · 滚轮缩放 · 右键平移 · 双击 Fit</div>
+
+  <div id="loading" class="overlay">
+    <div class="loader"></div>
+    <div class="loading-text">
+      <strong id="loading-title">正在加载模型…</strong>
+      <span id="loading-detail">模型只在本机读取，不上传</span>
+    </div>
+    <div class="progress"><i id="progress-bar"></i></div>
+  </div>
+
+  <div id="error" class="overlay hidden">
+    <div class="error-card glass">
+      <span class="eyebrow">LOAD ERROR</span>
+      <h1>模型没有加载成功</h1>
+      <p id="error-message"></p>
+      <p class="muted">请确认文件没有损坏，或换一个 .glb / .stl / .3mf 文件试试。</p>
+    </div>
+  </div>
+
+  <script type="module" src="/assets/webgl/viewer.js"></script>
+</body>
+</html>

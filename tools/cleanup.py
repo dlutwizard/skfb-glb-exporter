@@ -120,6 +120,7 @@ def main(argv=None) -> int:
 
     print("[1/4] 构建中间产物")
     c.drop_dir(ROOT / "build" / "work_dir", "PyInstaller 中间产物")
+    c.drop_dir(ROOT / "build" / "advanced_work", "内置 worker 中间产物")
     c.drop_dir(ROOT / "build" / "gen", "构建期生成物")
     if not args.keep_dist:
         c.drop_dir(ROOT / "build" / "dist_dir", "onedir 产物（zip 内含同一份）")

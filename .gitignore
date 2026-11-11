@@ -52,3 +52,7 @@ nodework/
 # 构建产物临时改名（清理时先改名再删，避免误入库）
 build/.trash-*/
 .trash-*/
+
+# 高级打印 worker 构建缓存（体积大、可再生）
+build/advanced_dist/
+build/advanced_work/

@@ -9,6 +9,7 @@
 |---|---|---|---|
 | Sketchfab CLI 下载引擎 | `dist_engine/` | **MIT** | Copyright (c) 2026 Sketchfab CLI contributors。全文见 `dist_engine/LICENSE`。本项目对其做了少量修补（模型名非法字符清洗、解密后端选择），已在文件内注明。 |
 | Sketchfab-Ripper 转换链 | `app/extlib/` | **MIT** | Copyright (c) 2026 [anotherRandomPersonlol](https://github.com/anotherRandomPersonlol/Sketchfab-Ripper)。上游为单文件 userscript，本项目拆分为 18 个 ES 模块，功能未删减。全文见 `app/extlib/LICENSE`。 |
+| Three.js（WebGL 查看器） | `app/assets/webgl/` | **MIT** | Copyright © 2010-2024 three.js authors。本项目使用其 WebGL 渲染器、GLTFLoader、STLLoader、3MFLoader、OrbitControls 与 RoomEnvironment，全部随包离线分发。全文见 `app/assets/webgl/LICENSE-three.txt`。 |
 
 ## 运行时依赖（打包进 Release）
 

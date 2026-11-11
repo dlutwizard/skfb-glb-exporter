@@ -28,6 +28,7 @@ a = Analysis(
         (os.path.join(APP, "node_modules"), "node_modules"),
         (os.path.join(APP, "icon.ico"), "."),
         (os.path.join(APP, "assets"), "assets"),
+        (os.path.join(APP, "advanced_print_worker.py"), "advanced"),
         (os.path.join(ROOT, "dist_engine"), "engine"),
         (os.path.join(ROOT, "CHANGELOG.md"), "."),
         (BUILD_INFO, "."),
@@ -36,7 +37,7 @@ a = Analysis(
     hiddenimports=[
         "requests", "urllib3", "certifi", "idna", "charset_normalizer",
         "version", "diagnostics", "update_checker", "sketchfab_search", "ui_theme",
-        "image_codec", "print_export", "preview3d", "preview_view",
+        "image_codec", "print_export", "print_advanced", "preview_web",
     ],
     hookspath=[],
     hooksconfig={},

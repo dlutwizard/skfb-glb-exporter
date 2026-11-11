@@ -12,8 +12,8 @@
 
 APP_NAME = "Sketchfab下载器"
 APP_ID = "SketchfabDownloader"       # exe 的 InternalName
-__version__ = "1.3.1"                # ← 改版本号只改这一行
-VERSION_TUPLE = (1, 3, 1)            # 必须与 __version__ 一致（模块尾断言）
+__version__ = "1.5.0"                # ← 改版本号只改这一行
+VERSION_TUPLE = (1, 5, 0)            # 必须与 __version__ 一致（模块尾断言）
 
 # ---- 更新检查（默认全关：未配置时零网络请求）----------------------------
 GITHUB_REPO = ""                     # "owner/name"；空 = 更新检查整体关闭

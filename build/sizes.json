@@ -530,5 +530,59 @@
       "engine": 364713,
       "node_modules": 20981702
     }
+  },
+  {
+    "version": "1.4.0",
+    "build_date": "2026-11-09",
+    "onedir_bytes": 149256058,
+    "zip_bytes": 58183637,
+    "startup_sec": 0.69,
+    "zip_files": 1173,
+    "slim_rules": [
+      "S1",
+      "S2",
+      "S3",
+      "S4",
+      "S5"
+    ],
+    "decrypt_backend": "wasm",
+    "components": {
+      "node_exe": 93922624,
+      "libvips_dup": 0,
+      "binzDecrypt_exe": 0,
+      "sharp_wasm32": 0,
+      "emnapi": 0,
+      "tslib": 0,
+      "sharp_win32_x64": 19812379,
+      "engine": 456920,
+      "node_modules": 20981702
+    }
+  },
+  {
+    "version": "1.5.0",
+    "build_date": "2026-11-11",
+    "onedir_bytes": 351244158,
+    "zip_bytes": 136718664,
+    "startup_sec": 0.65,
+    "zip_files": 1482,
+    "slim_rules": [
+      "S1",
+      "S2",
+      "S3",
+      "S4",
+      "S5"
+    ],
+    "decrypt_backend": "wasm",
+    "components": {
+      "node_exe": 93922624,
+      "libvips_dup": 0,
+      "binzDecrypt_exe": 0,
+      "sharp_wasm32": 0,
+      "emnapi": 0,
+      "tslib": 0,
+      "sharp_win32_x64": 19812379,
+      "engine": 456920,
+      "node_modules": 20981702
+    }
   }
 ]
