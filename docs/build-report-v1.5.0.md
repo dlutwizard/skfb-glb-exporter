@@ -1,20 +1,20 @@
 # 构建报告 · v1.5.0
 
-> 由 `build/build.py` 自动生成，请勿手改。构建日期：2026-11-11
+> 由 `build/build.py` 自动生成，请勿手改。构建日期：2026-11-12
 
 ## 1. 结论
 
 | 项 | 值 | 门禁 | 结果 |
 |---|---|---|---|
 | onedir 体积 | 335.0 MiB（351244158 B） | ≤ 420 MiB（M1） | PASS |
-| zip 体积 | 130.4 MB（136718664 B） | ≤ 280 MB（M2） | PASS |
-| 启动耗时（--selftest 中位） | 0.65 s | ≤ 1.7 s（M3） | PASS |
+| zip 体积 | 130.4 MB（136718668 B） | ≤ 280 MB（M2） | PASS |
+| 启动耗时（--selftest 中位） | 0.57 s | ≤ 1.7 s（M3） | PASS |
 | 版本一致性（exe 属性/--version/version.py） | 1.5.0 | 一致（M5） | PASS |
 | exe 自检 | SELFTEST_OK ×3 | 必须（R4） | PASS |
 | 实际解密后端 | wasm | 必须可观测 | PASS |
 | 包内禁止物（config.json / psutil / 旧使用说明） | 无 | 必须（R7） | PASS |
 | zip 内文件数 | 1482 | 连续两次一致 | 记录 |
-| 构建总耗时 | 77.7 s | — | — |
+| 构建总耗时 | 123.1 s | — | — |
 
 ## 2. 体积分项与增量
 
@@ -49,7 +49,7 @@
 
 ```
 $ Sketchfab下载器.exe --version
-Sketchfab下载器 v1.5.0 (build 2026-11-11)
+Sketchfab下载器 v1.5.0 (build 2026-11-12)
 
 $ Sketchfab下载器.exe --env
 RES = C:\Users\Lenovo\Sketchfab下载\build\dist_dir\Sketchfab下载器\_internal [OK]
@@ -62,10 +62,10 @@ WASM = [OK]
 EXTLIB = [OK]
 NODE_LOOKUP=C:\Users\Lenovo\Sketchfab下载\build\dist_dir\Sketchfab下载器\_internal\node.EXE
 DECRYPT_BACKEND=wasm
-BUILD=1.5.0 (2026-11-11), py3.11.5, pyinstaller 6.10.0
+BUILD=1.5.0 (2026-11-12), py3.11.5, pyinstaller 6.10.0
 
 $ Sketchfab下载器.exe --selftest  (×3)
-SELFTEST_OK  0.65s  0.65s  0.64s
+SELFTEST_OK  0.61s  0.57s  0.56s
 ```
 
 ## 5. 未纳入本报告的门禁

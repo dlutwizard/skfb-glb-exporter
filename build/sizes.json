@@ -560,10 +560,10 @@
   },
   {
     "version": "1.5.0",
-    "build_date": "2026-11-11",
+    "build_date": "2026-11-12",
     "onedir_bytes": 351244158,
-    "zip_bytes": 136718664,
-    "startup_sec": 0.65,
+    "zip_bytes": 136718668,
+    "startup_sec": 0.57,
     "zip_files": 1482,
     "slim_rules": [
       "S1",
